@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { FileDown, Mail, AlertTriangle, Info, Check, FileText } from 'lucide-react';
+import { FileDown, Mail, AlertTriangle, Info, Check, FileText, Database, FileSpreadsheet } from 'lucide-react';
 import { downloadReportPdf } from '@/lib/clinicalReport';
+import { downloadFhirJson, downloadBeatsCsv } from '@/lib/fhirExport';
 import HistorySummary from './HistorySummary';
 
 const LEVEL = {
@@ -84,10 +85,10 @@ export default function ClinicalReport({ report, onEmail }) {
 
       <HistorySummary history={report.history} />
 
-      <div className="flex gap-2">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <button
           onClick={() => downloadReportPdf(report)}
-          className="flex flex-1 items-center justify-center gap-1.5 rounded-xl py-2.5 text-[12px] font-semibold text-[#04120b]"
+          className="flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-[11px] font-semibold text-[#04120b]"
           style={{ background: 'linear-gradient(135deg,#00ff88,#00cc6a)' }}
         >
           <FileDown className="h-3.5 w-3.5" />
@@ -96,10 +97,26 @@ export default function ClinicalReport({ report, onEmail }) {
         <button
           onClick={handleEmail}
           disabled={sending || sent}
-          className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-white/12 bg-white/[0.05] py-2.5 text-[12px] font-medium text-white/85 disabled:opacity-60"
+          className="flex items-center justify-center gap-1.5 rounded-xl border border-white/12 bg-white/[0.05] py-2.5 text-[11px] font-medium text-white/85 disabled:opacity-60"
         >
           {sent ? <Check className="h-3.5 w-3.5 text-primary" /> : <Mail className="h-3.5 w-3.5" />}
-          {sent ? 'Enviado' : sending ? 'Enviando…' : 'Enviar por correo'}
+          {sent ? 'Enviado' : sending ? 'Enviando…' : 'Por correo'}
+        </button>
+        <button
+          onClick={() => downloadFhirJson(report)}
+          className="flex items-center justify-center gap-1.5 rounded-xl border border-white/12 bg-white/[0.05] py-2.5 text-[11px] font-medium text-white/85 hover:border-primary/40 hover:bg-white/[0.08]"
+          title="Exportar en formato estándar HL7 FHIR Observation (LOINC)"
+        >
+          <Database className="h-3.5 w-3.5 text-cyan-400" />
+          FHIR JSON
+        </button>
+        <button
+          onClick={() => downloadBeatsCsv(report.acceptedBeats || [], report)}
+          className="flex items-center justify-center gap-1.5 rounded-xl border border-white/12 bg-white/[0.05] py-2.5 text-[11px] font-medium text-white/85 hover:border-primary/40 hover:bg-white/[0.08]"
+          title="Exportar serie temporal completa de intervalos RR en CSV"
+        >
+          <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-400" />
+          CSV Latidos
         </button>
       </div>
     </section>

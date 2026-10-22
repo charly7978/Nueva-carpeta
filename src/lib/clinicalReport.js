@@ -35,6 +35,8 @@ export function buildClinicalReport({ beats = [], vitals, durationS, patient, hi
     { label: measured?.bp
       ? (measured.bp.calibrated ? 'Presion estimada (anclada a manguito)' : 'Presion estimada (referencia poblacional)')
       : 'Presion estimada', value: measured?.bp ? `${fmt(measured.bp.sbp, 0)} / ${fmt(measured.bp.dbp, 0)}` : '--', unit: 'mmHg' },
+    { label: 'Indice envejecimiento vascular (AGI)', value: measured?.bpFeatures?.agi != null ? fmt(measured.bpFeatures.agi, 2) : '--', unit: '' },
+    { label: 'Indice de aumento arterial (AIx)', value: measured?.bpFeatures?.aix != null ? fmt(measured.bpFeatures.aix, 2) : '--', unit: '' },
     { label: 'Latidos incluidos con calidad aceptada', value: String(accepted.length), unit: '' },
     { label: 'Duracion de la medicion', value: fmt(durationS, 0), unit: 's' },
     { label: 'Tramo continuo de senal aceptada', value: fmt(vitals?.cleanSeconds ?? 0, 1), unit: 's' },
@@ -43,6 +45,10 @@ export function buildClinicalReport({ beats = [], vitals, durationS, patient, hi
     { label: 'SDNN (registro corto orientativo)', value: fmt(hrv?.sdnn, 0), unit: 'ms' },
     { label: 'RMSSD', value: fmt(hrv?.rmssd, 0), unit: 'ms' },
     { label: 'pNN50', value: fmt(hrv?.pnn50, 0), unit: '%' },
+    { label: 'Poincare SD1 (variabilidad corta/vagal)', value: fmt(hrv?.sd1, 1), unit: 'ms' },
+    { label: 'Poincare SD2 (variabilidad larga)', value: fmt(hrv?.sd2, 1), unit: 'ms' },
+    { label: 'Ratio Poincare SD1/SD2', value: fmt(hrv?.sd1_sd2, 2), unit: '' },
+    { label: 'Coeficiente de variacion (CV)', value: fmt(hrv?.cv, 1), unit: '%' },
     { label: 'LF/HF (requiere registro suficiente)', value: fmt(hrv?.lf_hf, 2), unit: '' },
   ];
   const alerts = [];
@@ -67,6 +73,9 @@ export function buildClinicalReport({ beats = [], vitals, durationS, patient, hi
     generatedAt: new Date().toISOString(), patient: patient || 'Usuario', durationS,
     averages, variability, rhythm, alerts,
     history: historySummary || { count: 0, eligibleCount: 0, averages: [], alerts: [] },
+    vitals: measured,
+    hrv,
+    acceptedBeats: accepted,
   };
 }
 
@@ -93,6 +102,7 @@ function heading(doc, text, y) {
 function rows(doc, items, y) {
   doc.setFontSize(9.5);
   items.forEach((it) => {
+    y = ensure(doc, y, 9);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(...MUTED);
     doc.text(it.label, M, y);

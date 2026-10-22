@@ -439,13 +439,59 @@ function interpolateRRUniform(rrIntervals, targetFs) {
   return Array.from(out);
 }
 
+/**
+ * Sample Entropy (SampEn) — cuantifica la complejidad e irregularidad de la serie RR.
+ * m = 2 (dimensión embebida), r = 0.2 * std (tolerancia de similitud).
+ */
+export function sampleEntropy(arr, m = 2, r = null) {
+  const n = arr.length;
+  if (n < m + 4) return null;
+  const tolerance = r !== null ? r : 0.2 * std(arr);
+  if (tolerance <= 1e-9) return null;
+
+  let b = 0;
+  let a = 0;
+
+  for (let i = 0; i < n - m; i++) {
+    for (let j = i + 1; j < n - m; j++) {
+      let matchM = true;
+      for (let k = 0; k < m; k++) {
+        if (Math.abs(arr[i + k] - arr[j + k]) > tolerance) {
+          matchM = false;
+          break;
+        }
+      }
+      if (matchM) {
+        b++;
+        if (Math.abs(arr[i + m] - arr[j + m]) <= tolerance) {
+          a++;
+        }
+      }
+    }
+  }
+
+  if (b === 0 || a === 0) return null;
+  return Math.round(-Math.log(a / b) * 100) / 100;
+}
+
 export function computeHRV(rrIntervals) {
-  if (rrIntervals.length < 2) return { sdnn: 0, rmssd: 0, pnn50: 0, lf_hf: 0 };
+  if (rrIntervals.length < 2) {
+    return { sdnn: 0, rmssd: 0, pnn50: 0, lf_hf: 0, sd1: 0, sd2: 0, sd1_sd2: 0, cv: 0, sampen: null };
+  }
 
   const sdnn = std(rrIntervals);
   const diffs = rrIntervals.slice(1).map((v, i) => v - rrIntervals[i]);
   const rmssd = Math.sqrt(mean(diffs.map(d => d * d)));
   const pnn50 = (diffs.filter(d => Math.abs(d) > 50).length / diffs.length) * 100;
+  const meanRR = mean(rrIntervals);
+  const cv = meanRR > 0 ? (sdnn / meanRR) * 100 : 0;
+
+  // Poincaré plot metrics: SD1 (corto plazo / vagal) y SD2 (largo plazo)
+  const sd1 = rmssd / Math.SQRT2;
+  const sd2Radicand = 2 * sdnn * sdnn - (rmssd * rmssd) / 2;
+  const sd2 = sd2Radicand > 0 ? Math.sqrt(sd2Radicand) : sd1;
+  const sd1_sd2 = sd2 > 1e-6 ? sd1 / sd2 : 0;
+  const sampen = rrIntervals.length >= 10 ? sampleEntropy(rrIntervals) : null;
 
   // Spectral LF/HF via properly interpolated uniform RR series
   let lf_hf = 0;
@@ -467,52 +513,135 @@ export function computeHRV(rrIntervals) {
   }
 
   return {
-    sdnn:   Math.round(sdnn   * 10) / 10,
-    rmssd:  Math.round(rmssd  * 10) / 10,
-    pnn50:  Math.round(pnn50  * 10) / 10,
-    lf_hf:  Math.round(lf_hf  * 100) / 100
+    sdnn:    Math.round(sdnn    * 10) / 10,
+    rmssd:   Math.round(rmssd   * 10) / 10,
+    pnn50:   Math.round(pnn50   * 10) / 10,
+    lf_hf:   Math.round(lf_hf   * 100) / 100,
+    sd1:     Math.round(sd1     * 10) / 10,
+    sd2:     Math.round(sd2     * 10) / 10,
+    sd1_sd2: Math.round(sd1_sd2 * 100) / 100,
+    cv:      Math.round(cv      * 10) / 10,
+    sampen,
   };
 }
 
 // ─────────────────────────────────────────────────────────────
-// RESPIRATORY RATE — beat-amplitude modulation (Charlton 2016)
+// RESPIRATORY RATE — Multi-Modulation Fusion (BW + AM + FM)
+// (Charlton et al., Physiological Measurement 2016)
 // ─────────────────────────────────────────────────────────────
 
 export function computeRespRate(filteredSignal, fs) {
   if (filteredSignal.length < fs * 12) return null;
 
+  const candidates = [];
+
+  // 1. Modulación BW (Baseline Wander): filtrado en la banda respiratoria [0.1, 0.6] Hz (6 a 36 brpm)
+  try {
+    const sosResp = designButterworthBandpass(0.1, 0.6, fs);
+    const bwSignal = filtfilt(sosResp, filteredSignal);
+    const bwFreq = dominantFrequency(bwSignal, fs, 0.1, 0.6);
+    if (bwFreq >= 0.1 && bwFreq <= 0.6) {
+      candidates.push({ source: 'BW', freq: bwFreq, weight: 1.2 });
+    }
+  } catch {
+    /* Fallback si el filtro encuentra singularidades */
+  }
+
+  // 2. Modulaciones AM y FM a partir de la detección de picos sistólicos
   const norm = normalizeSignal(filteredSignal);
   const { beats } = elgendiPeakDetector(norm, fs);
 
   if (beats.length >= 4) {
-    // Build amplitude-envelope at beat locations then interpolate
     const beatTimes = beats.map(b => b / fs);
-    const beatAmps  = beats.map(b => filteredSignal[b]);
-    const interpFs  = 4;
+    const beatAmps = beats.map(b => filteredSignal[b]);
+    const interpFs = 4;
     const totalTime = beatTimes[beatTimes.length - 1];
     const nPts = Math.max(16, 1 << Math.ceil(Math.log2(totalTime * interpFs)));
-    const envelope = new Float64Array(nPts);
+
+    // AM: envolvente de amplitud sistólica interpolada uniformemente a 4 Hz
+    const amEnvelope = new Float64Array(nPts);
     let lo = 0;
     for (let k = 0; k < nPts; k++) {
       const t = k / interpFs;
-      if (t >= totalTime) { envelope[k] = beatAmps[beatAmps.length - 1]; continue; }
+      if (t >= totalTime) { amEnvelope[k] = beatAmps[beatAmps.length - 1]; continue; }
       while (lo < beatTimes.length - 2 && beatTimes[lo + 1] <= t) lo++;
       const dt = beatTimes[lo + 1] - beatTimes[lo];
       const frac = dt > 0 ? (t - beatTimes[lo]) / dt : 0;
-      envelope[k] = beatAmps[lo] + frac * (beatAmps[Math.min(lo + 1, beatAmps.length - 1)] - beatAmps[lo]);
+      amEnvelope[k] = beatAmps[lo] + frac * (beatAmps[Math.min(lo + 1, beatAmps.length - 1)] - beatAmps[lo]);
     }
-    const respFreq = dominantFrequency(Array.from(envelope), interpFs, 0.1, 0.6);
-    const rr = respFreq * 60;
-    if (rr >= 4 && rr <= 40) return Math.round(rr * 10) / 10;
+    const amFreq = dominantFrequency(Array.from(amEnvelope), interpFs, 0.1, 0.6);
+    if (amFreq >= 0.1 && amFreq <= 0.6) {
+      candidates.push({ source: 'AM', freq: amFreq, weight: 1.0 });
+    }
+
+    // FM: arritmia sinusal respiratoria (RSA) a partir de intervalos interlatido
+    if (beats.length >= 6) {
+      const ibis = [];
+      const ibiTimes = [];
+      for (let i = 1; i < beats.length; i++) {
+        const dtMs = ((beats[i] - beats[i - 1]) / fs) * 1000;
+        if (dtMs >= 300 && dtMs <= 1800) {
+          ibis.push(dtMs);
+          ibiTimes.push(beatTimes[i]);
+        }
+      }
+      if (ibis.length >= 5) {
+        const fmEnvelope = new Float64Array(nPts);
+        let loIbi = 0;
+        for (let k = 0; k < nPts; k++) {
+          const t = k / interpFs;
+          if (t >= totalTime) { fmEnvelope[k] = ibis[ibis.length - 1]; continue; }
+          while (loIbi < ibiTimes.length - 2 && ibiTimes[loIbi + 1] <= t) loIbi++;
+          const dt = ibiTimes[loIbi + 1] - ibiTimes[loIbi];
+          const frac = dt > 0 ? (t - ibiTimes[loIbi]) / dt : 0;
+          fmEnvelope[k] = ibis[loIbi] + frac * (ibis[Math.min(loIbi + 1, ibis.length - 1)] - ibis[loIbi]);
+        }
+        const fmFreq = dominantFrequency(Array.from(fmEnvelope), interpFs, 0.1, 0.6);
+        if (fmFreq >= 0.1 && fmFreq <= 0.6) {
+          candidates.push({ source: 'FM', freq: fmFreq, weight: 1.1 });
+        }
+      }
+    }
   }
 
-  // Fallback: Hilbert-envelope approach
+  // Fusión inteligente: búsqueda de consenso entre modulaciones dentro de ±0.05 Hz (~3 brpm)
+  if (candidates.length >= 2) {
+    let bestPair = null;
+    let minDiff = Infinity;
+    for (let i = 0; i < candidates.length; i++) {
+      for (let j = i + 1; j < candidates.length; j++) {
+        const diff = Math.abs(candidates[i].freq - candidates[j].freq);
+        if (diff < minDiff) {
+          minDiff = diff;
+          bestPair = [candidates[i], candidates[j]];
+        }
+      }
+    }
+    if (bestPair && minDiff <= 0.05) {
+      const [c1, c2] = bestPair;
+      const fusedHz = (c1.freq * c1.weight + c2.freq * c2.weight) / (c1.weight + c2.weight);
+      const fusedBrpm = fusedHz * 60;
+      if (fusedBrpm >= 6 && fusedBrpm <= 36) {
+        return Math.round(fusedBrpm * 10) / 10;
+      }
+    }
+  }
+
+  // Si no hay consenso binario, tomar el estimador principal disponible
+  if (candidates.length > 0) {
+    const primaryBrpm = candidates[0].freq * 60;
+    if (primaryBrpm >= 6 && primaryBrpm <= 36) {
+      return Math.round(primaryBrpm * 10) / 10;
+    }
+  }
+
+  // Fallback: envolvente rectificada Hilbert
   const rectified = filteredSignal.map(v => Math.abs(v));
-  const sos = designButterworthBandpass(0.1, 0.8, fs);
+  const sos = designButterworthBandpass(0.1, 0.6, fs);
   const envelope = filtfilt(sos, rectified);
   const respFreq = dominantFrequency(envelope, fs, 0.1, 0.6);
   const rr = respFreq * 60;
-  return (rr >= 4 && rr <= 40) ? Math.round(rr * 10) / 10 : null;
+  return (rr >= 6 && rr <= 36) ? Math.round(rr * 10) / 10 : null;
 }
 
 // ─────────────────────────────────────────────────────────────

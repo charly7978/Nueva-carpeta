@@ -5,9 +5,13 @@ export default function HRVPanel({ hrv }) {
 
   const metrics = [
     { label: 'SDNN', value: hrv.sdnn ? `${hrv.sdnn}ms` : '--', desc: 'Variabilidad global' },
-    { label: 'RMSSD', value: hrv.rmssd ? `${hrv.rmssd}ms` : '--', desc: 'Corto plazo' },
+    { label: 'RMSSD', value: hrv.rmssd ? `${hrv.rmssd}ms` : '--', desc: 'Corto plazo / vagal' },
     { label: 'pNN50', value: hrv.pnn50 !== undefined ? `${hrv.pnn50}%` : '--', desc: 'Tono parasimpático' },
     { label: 'LF/HF', value: hrv.lf_hf !== undefined ? hrv.lf_hf.toFixed(2) : '--', desc: 'Balance ANS' },
+    { label: 'SD1', value: hrv.sd1 ? `${hrv.sd1}ms` : '--', desc: 'Poincaré transversal' },
+    { label: 'SD2', value: hrv.sd2 ? `${hrv.sd2}ms` : '--', desc: 'Poincaré longitudinal' },
+    { label: 'SD1/SD2', value: hrv.sd1_sd2 !== undefined ? hrv.sd1_sd2.toFixed(2) : '--', desc: 'Ratio autonómico' },
+    { label: 'SampEn', value: hrv.sampen != null ? hrv.sampen.toFixed(2) : (hrv.cv ? `${hrv.cv}%` : '--'), desc: hrv.sampen != null ? 'Entropía complejidad' : 'Coef. Variación' },
   ];
 
   let stress = null;

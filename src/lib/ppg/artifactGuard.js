@@ -17,10 +17,14 @@ export class ArtifactGuard {
     this.bad = false;
   }
 
-  update(t, rgb, usable, spatial, contact, selected) {
+  update(t, rgb, usable, spatial, contact, selected, inertial = 0) {
     const p = this.previous;
     let bad = !contact || !usable[selected];
     bad ||= this.spatialMotion.update(t, spatial, usable, selected);
+    // Sacudida física o temblor inercial del dispositivo (> 2.2 m/s² de aceleración dinámica)
+    if (Number.isFinite(inertial) && inertial > 2.2) {
+      bad = true;
+    }
     let diff = null;
     if (p && t > p.t && t - p.t <= 0.2) {
       // Normalize differences to nominal frame duration: a real pulse naturally

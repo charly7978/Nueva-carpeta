@@ -312,8 +312,8 @@ export default function VitalScan() {
       <RecordsSheet
         open={recordOpen}
         onOpenChange={setRecordOpen}
-        beats={beats}
-        hrv={vitals?.hrv}
+        beats={beats.length ? beats : (clinicalReport.report?.acceptedBeats || [])}
+        hrv={vitals?.hrv || clinicalReport.report?.hrv}
         records={records}
         onEdit={openEditor}
         report={clinicalReport.report}

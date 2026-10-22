@@ -1,0 +1,5 @@
+ArXiv API Terms of Use Notification:
+Please check the arXiv API terms of use at https://info.arxiv.org/help/api/index.html and always verify the specific licenses of papers retrieved for any restrictions.
+
+Timestamp: 2026-10-22T03:26:40-03:00
+Status: Notified user

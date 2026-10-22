@@ -8,6 +8,7 @@
  * latido aislado sin suavizar la morfología que aporta la información.
  */
 import { elgendiPeakDetector, normalizeSignal } from '@/lib/dsp';
+import { analyzeSDPPG } from '@/lib/ppg/sdppg';
 
 const MAX_BEATS = 20;
 const MIN_BEATS = 4;
@@ -94,11 +95,15 @@ export function extractBpFeatures(filteredSignal, fs, hr) {
     ? Math.max(0, Math.min(1, (tpl[refl] - tpl[notch]) / pp))
     : 0;
 
+  const sdppg = analyzeSDPPG(tpl, fs);
+
   return {
     hr: Math.round(hr),
     aix: Math.round(aix * 1000) / 1000,
     crest: Math.round(crest),
     width: Math.round(width),
     beats: n,
+    agi: sdppg?.agi ?? null,
+    sdppg: sdppg || null,
   };
 }

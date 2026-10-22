@@ -121,6 +121,8 @@ export class PPGEngine {
     this.vfcId = null;
     this.rafId = null;
     this.running = false;
+    this.inertialMotion = 0;
+    this.motionListener = null;
   }
 
   /** Fija el anclaje de presión; se aplica en el siguiente ciclo lento */
@@ -213,6 +215,7 @@ export class PPGEngine {
       this._emitVitals(performance.now(), this.pipeline.getState());
     });
     this.running = true;
+    this._startInertialSensor();
     this.watchdog.start();
     this.onStatus({ type: 'running' });
     this._scheduleCameraFrame();
@@ -253,8 +256,44 @@ export class PPGEngine {
     throw cameraError(lastErr);
   }
 
+  _startInertialSensor() {
+    if (typeof window === 'undefined') return;
+    this.inertialMotion = 0;
+    this.motionListener = (event) => {
+      const acc = event.acceleration;
+      if (acc && Number.isFinite(acc.x) && Number.isFinite(acc.y) && Number.isFinite(acc.z)) {
+        this.inertialMotion = Math.sqrt(acc.x * acc.x + acc.y * acc.y + acc.z * acc.z);
+      } else if (event.accelerationIncludingGravity) {
+        const gAcc = event.accelerationIncludingGravity;
+        const mag = Math.sqrt((gAcc.x || 0) ** 2 + (gAcc.y || 0) ** 2 + (gAcc.z || 0) ** 2);
+        this.inertialMotion = Math.abs(mag - 9.80665);
+      }
+    };
+
+    try {
+      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+        DeviceMotionEvent.requestPermission()
+          .then((state) => {
+            if (state === 'granted' && this.running) {
+              window.addEventListener('devicemotion', this.motionListener, { passive: true });
+            }
+          })
+          .catch(() => {});
+      } else if (typeof window !== 'undefined' && 'ondevicemotion' in window) {
+        window.addEventListener('devicemotion', this.motionListener, { passive: true });
+      }
+    } catch {
+      /* Sensores inerciales no disponibles o permisos denegados */
+    }
+  }
+
   stop() {
     this.running = false;
+    if (this.motionListener && typeof window !== 'undefined') {
+      window.removeEventListener('devicemotion', this.motionListener);
+      this.motionListener = null;
+    }
+    this.inertialMotion = 0;
     this.captureStabilizer?.stop();
     this.captureStabilizer = null;
     this.watchdog.stop();
@@ -336,11 +375,15 @@ export class PPGEngine {
     const dR = this.prevR === null ? 0 : Math.abs(r - this.prevR);
     this.prevR = r;
     this.diffHist.push(dR);
-    if (this.diffHist.length > 45) this.diffHist.shift();
-    const motionLevel = Math.min(100, Math.round((dR / ((median(this.diffHist) || 0) * 6 + 2)) * 100));
+    const opticalMotion = (dR / ((median(this.diffHist) || 0) * 6 + 2)) * 100;
+    const motionLevel = Math.min(100, Math.round(opticalMotion + Math.min(60, this.inertialMotion * 12)));
 
     this._feed(tMs / 1000, r, g, b, optical.confidence, motionLevel, {
-      usable: optical.usable, contact: optical.contact, spatial: optical.spatial, issue: optical.issue,
+      usable: optical.usable,
+      contact: optical.contact,
+      spatial: optical.spatial,
+      issue: optical.issue,
+      inertial: this.inertialMotion,
     });
   }
 

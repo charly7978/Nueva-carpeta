@@ -146,7 +146,7 @@ export class PPGPipeline {
       }
     }
     const cur = [r, g, b];
-    const disturbed = this.artifacts.update(t, cur, this.usable, optical.spatial, this.contact, this.sel);
+    const disturbed = this.artifacts.update(t, cur, this.usable, optical.spatial, this.contact, this.sel, optical.inertial ?? 0);
     // Brief disturbances invalidate intervals, not all acquisition history.
     // A sustained disruption resets ONCE, never again on quarantine exit.
     if (this.artifacts.bad) {
