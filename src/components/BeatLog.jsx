@@ -1,8 +1,8 @@
 import { motion } from 'framer-motion';
-import { Activity } from 'lucide-react';
+import { Activity, Clock, Zap } from 'lucide-react';
 
-const EASE = [0.22, 1, 0.36, 1];
-const MAX_ROWS = 40;
+const EASE = [0.16, 1, 0.3, 1];
+const MAX_ROWS = 50;
 
 const latencyColor = (ms) =>
   ms == null ? 'rgba(255,255,255,0.25)' : ms < 60 ? '#00ff88' : ms < 150 ? '#22d3ee' : '#fbbf24';
@@ -10,9 +10,9 @@ const latencyColor = (ms) =>
 const clock = (s) =>
   `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
-const ROW = 'grid grid-cols-[36px_44px_1fr_58px_62px] items-center gap-1';
+const ROW = 'grid grid-cols-[42px_54px_1fr_68px_72px] items-center gap-2';
 
-/** Registro de cada latido: intervalo, pulso y latencia real de detección */
+/** Registro de latidos latido a latido con latencia real de detección */
 export default function BeatLog({ beats = [] }) {
   const rows = beats.slice(0, MAX_ROWS);
   const lats = beats.map((b) => b.latency).filter((v) => v != null);
@@ -20,69 +20,81 @@ export default function BeatLog({ beats = [] }) {
   const max = lats.length ? Math.max(...lats) : null;
 
   return (
-    <section
-      className="overflow-hidden rounded-2xl border border-white/[0.07]"
-      style={{ background: 'linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))' }}
-    >
-      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.05] px-3.5 py-2.5">
-        <div className="flex items-center gap-2">
-          <Activity className="h-3.5 w-3.5 text-primary" />
-          <span className="font-mono text-[10px] uppercase tracking-[0.24em] text-white/45">
-            Registro de latidos
-          </span>
+    <section className="overflow-hidden rounded-3xl border border-white/10 bg-card/75 shadow-2xl backdrop-blur-2xl">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.08] px-4 py-3">
+        <div className="flex items-center gap-2.5">
+          <div className="grid h-8 w-8 place-items-center rounded-xl border border-primary/30 bg-primary/10 text-primary">
+            <Activity className="h-4 w-4" />
+          </div>
+          <div>
+            <h4 className="font-display text-[14px] font-bold text-white leading-none">
+              Serie Temporal de Latidos
+            </h4>
+            <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-white/40 block mt-1">
+              Registro continuo R-R / IBI
+            </span>
+          </div>
         </div>
-        <div className="flex items-center gap-3 font-mono text-[9px] uppercase tracking-[0.14em] text-white/35">
-          <span>{beats.length} latidos</span>
-          <span>
-            Lat. media{' '}
-            <span className="tabular" style={{ color: latencyColor(avg) }}>
+
+        <div className="flex items-center gap-3 font-mono text-[10px] tracking-wider text-white/45">
+          <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 text-white/80">
+            {beats.length} latidos
+          </span>
+          <span className="flex items-center gap-1">
+            <Zap className="h-3 w-3 text-cyan-400" />
+            Media:{' '}
+            <span className="tabular font-bold" style={{ color: latencyColor(avg) }}>
               {avg ?? '--'} ms
             </span>
           </span>
           <span>
-            Máx <span className="tabular text-white/55">{max ?? '--'} ms</span>
+            Máx: <span className="tabular text-white/70">{max ?? '--'} ms</span>
           </span>
         </div>
       </header>
 
-      <div className={`${ROW} border-b border-white/[0.04] px-3.5 py-1.5 font-mono text-[8px] uppercase tracking-[0.16em] text-white/25`}>
-        <span>#</span>
-        <span>Tiempo</span>
-        <span className="text-right">IBI</span>
+      {/* Cabecera de columnas */}
+      <div className={`${ROW} border-b border-white/[0.05] px-4 py-2 font-mono text-[9px] uppercase tracking-[0.18em] text-white/35 bg-white/[0.02]`}>
+        <span># ID</span>
+        <span className="flex items-center gap-1">
+          <Clock className="h-3 w-3" /> Tiempo
+        </span>
+        <span className="text-right">Intervalo IBI</span>
         <span className="text-right">Pulso</span>
         <span className="text-right">Latencia</span>
       </div>
 
       {rows.length === 0 ? (
-        <p className="px-3.5 py-6 text-center font-mono text-[10px] uppercase tracking-[0.2em] text-white/25">
-          Esperando latidos…
-        </p>
+        <div className="px-4 py-12 text-center font-mono text-[11px] uppercase tracking-[0.2em] text-white/35">
+          <Activity className="mx-auto h-7 w-7 text-white/20 mb-2 animate-pulse" />
+          Esperando primeros latidos confirmados…
+        </div>
       ) : (
-        <div className="max-h-[188px] overflow-y-auto">
+        <div className="max-h-[220px] overflow-y-auto divide-y divide-white/[0.03]">
           {rows.map((b) => (
             <motion.div
               key={b.id}
               initial={{ opacity: 0, x: -8 }}
               animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: 0.3, ease: EASE }}
-              className={`${ROW} border-b border-white/[0.03] px-3.5 py-1.5 font-mono text-[10px] last:border-b-0`}
+              transition={{ duration: 0.25, ease: EASE }}
+              className={`${ROW} px-4 py-2 font-mono text-[11px] hover:bg-white/[0.04] transition-colors`}
             >
-              <span className="text-white/30">#{b.id}</span>
-              <span className="text-white/45">{clock(b.elapsed)}</span>
+              <span className="text-white/30 font-semibold">#{b.id}</span>
+              <span className="text-white/55 tabular">{clock(b.elapsed)}</span>
               <span
-                className="tabular text-right"
+                className="tabular text-right font-medium"
                 style={{ color: b.ibi != null ? '#00ff88' : 'rgba(255,255,255,0.25)' }}
               >
                 {b.ibi ?? '--'}
-                <span className="ml-0.5 text-[8px] text-white/25">ms</span>
+                <span className="ml-1 text-[8px] text-white/30">ms</span>
               </span>
-              <span className="tabular text-right text-white/70">
+              <span className="tabular text-right font-semibold text-white/90">
                 {b.hr ?? '--'}
-                <span className="ml-0.5 text-[8px] text-white/25">bpm</span>
+                <span className="ml-1 text-[8px] text-white/30">bpm</span>
               </span>
-              <span className="tabular text-right" style={{ color: latencyColor(b.latency) }}>
+              <span className="tabular text-right font-medium" style={{ color: latencyColor(b.latency) }}>
                 {b.latency ?? '--'}
-                <span className="ml-0.5 text-[8px] text-white/25">ms</span>
+                <span className="ml-1 text-[8px] text-white/30">ms</span>
               </span>
             </motion.div>
           ))}

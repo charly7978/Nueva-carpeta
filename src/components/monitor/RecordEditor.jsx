@@ -1,16 +1,20 @@
 import { useState } from 'react';
+import { motion } from 'framer-motion';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { Trash2 } from 'lucide-react';
+import { Trash2, Save, FileEdit } from 'lucide-react';
 import { RECORD_FIELDS } from '@/lib/vitalRecords';
+import { triggerHaptic, HapticPattern } from '@/utils/haptics';
 
 const inputCls =
-  'w-full rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-2 text-[13px] text-white/90 outline-none focus:border-primary/50';
+  'w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[13px] text-white/95 outline-none focus:border-primary/60 focus:bg-white/[0.07] transition-all font-mono';
 
 /** Editor de una lectura guardada: corrige sus cifras y notas, o la elimina. */
 export default function RecordEditor({ record, onOpenChange, onSave, onDelete }) {
   const [draft, setDraft] = useState(() => {
     const d = {};
-    RECORD_FIELDS.forEach((f) => { d[f.key] = record[f.key] == null ? '' : String(record[f.key]); });
+    RECORD_FIELDS.forEach((f) => {
+      d[f.key] = record[f.key] == null ? '' : String(record[f.key]);
+    });
     d.notes = record.notes || '';
     return d;
   });
@@ -20,6 +24,7 @@ export default function RecordEditor({ record, onOpenChange, onSave, onDelete })
   const set = (key) => (e) => setDraft((d) => ({ ...d, [key]: e.target.value }));
 
   const handleSave = async () => {
+    triggerHaptic(HapticPattern.SUCCESS);
     setBusy(true);
     const values = { notes: draft.notes.trim() };
     RECORD_FIELDS.forEach((f) => {
@@ -32,6 +37,7 @@ export default function RecordEditor({ record, onOpenChange, onSave, onDelete })
   };
 
   const handleDelete = async () => {
+    triggerHaptic(HapticPattern.WARNING);
     setBusy(true);
     await onDelete(record.id);
     setBusy(false);
@@ -40,20 +46,28 @@ export default function RecordEditor({ record, onOpenChange, onSave, onDelete })
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[88dvh] overflow-y-auto border-white/10 bg-background sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="font-display">Editar lectura</DialogTitle>
-          <DialogDescription className="sr-only">
-            Corrige o amplía las cifras y las notas de esta medición guardada
-          </DialogDescription>
+      <DialogContent className="max-h-[90dvh] overflow-y-auto rounded-[28px] border border-white/12 bg-card/95 p-5 sm:max-w-md shadow-2xl backdrop-blur-2xl">
+        <DialogHeader className="pb-2 border-b border-white/[0.08]">
+          <div className="flex items-center gap-2.5">
+            <div className="grid h-9 w-9 place-items-center rounded-xl border border-primary/30 bg-primary/10 text-primary">
+              <FileEdit className="h-4 w-4" />
+            </div>
+            <div>
+              <DialogTitle className="font-display text-lg font-bold text-white">
+                Editar Registro Fisiológico
+              </DialogTitle>
+              <DialogDescription className="font-mono text-[9px] uppercase tracking-[0.2em] text-white/45">
+                Ajuste manual de telemetría y observaciones
+              </DialogDescription>
+            </div>
+          </div>
         </DialogHeader>
 
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-2 gap-2.5 pt-2">
           {RECORD_FIELDS.map((f) => (
             <label key={f.key} className="block">
-              <span className="mb-1 block font-mono text-[9px] uppercase tracking-[0.16em] text-white/40">
-                {f.label}
-                {f.unit ? ` · ${f.unit}` : ''}
+              <span className="mb-1 block font-mono text-[9px] uppercase tracking-[0.16em] text-white/45 truncate">
+                {f.label} {f.unit ? `(${f.unit})` : ''}
               </span>
               <input
                 type="number"
@@ -66,42 +80,58 @@ export default function RecordEditor({ record, onOpenChange, onSave, onDelete })
           ))}
         </div>
 
-        <label className="block">
-          <span className="mb-1 block font-mono text-[9px] uppercase tracking-[0.16em] text-white/40">Notas</span>
+        <label className="block mt-2">
+          <span className="mb-1 block font-mono text-[9px] uppercase tracking-[0.16em] text-white/45">
+            Notas Clínicas y Síntomas
+          </span>
           <textarea
             rows={3}
             value={draft.notes}
             onChange={set('notes')}
-            placeholder="Contexto de la medición, síntomas, medicación…"
-            className={`${inputCls} resize-none`}
+            placeholder="Contexto de la medición, síntomas, medicación previa…"
+            className={`${inputCls} resize-none font-sans`}
           />
         </label>
 
-        <div className="flex items-center gap-2 pt-1">
-          <button
+        <div className="flex items-center gap-2.5 pt-3">
+          <motion.button
+            type="button"
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.97 }}
             onClick={handleSave}
             disabled={busy}
-            className="flex-1 rounded-xl py-2.5 text-[13px] font-semibold text-[#04120b] disabled:opacity-50"
-            style={{ background: 'linear-gradient(135deg,#00ff88,#00cc6a)' }}
+            className="flex-1 flex items-center justify-center gap-2 rounded-2xl py-3 text-[13px] font-bold text-[#021008] shadow-[0_8px_20px_rgba(0,255,136,0.25)] transition-all disabled:opacity-50"
+            style={{ background: 'linear-gradient(135deg, #00ff88, #00cc6a)' }}
           >
-            Guardar cambios
-          </button>
+            <Save className="h-4 w-4" />
+            <span>Guardar Cambios</span>
+          </motion.button>
+
           {confirming ? (
-            <button
+            <motion.button
+              type="button"
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.97 }}
               onClick={handleDelete}
               disabled={busy}
-              className="rounded-xl border border-[rgba(239,68,68,0.5)] bg-[rgba(239,68,68,0.15)] px-3 py-2.5 text-[12px] font-medium text-[#ef4444] disabled:opacity-50"
+              className="rounded-2xl border border-red-500/50 bg-red-500/20 px-3.5 py-3 text-[12px] font-semibold text-red-300 disabled:opacity-50"
             >
-              Confirmar borrado
-            </button>
+              Confirmar
+            </motion.button>
           ) : (
-            <button
-              onClick={() => setConfirming(true)}
+            <motion.button
+              type="button"
+              whileHover={{ scale: 1.06 }}
+              whileTap={{ scale: 0.94 }}
+              onClick={() => {
+                triggerHaptic(HapticPattern.WARNING);
+                setConfirming(true);
+              }}
               aria-label="Eliminar lectura"
-              className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.1)] text-[#ef4444] transition-colors hover:bg-[rgba(239,68,68,0.2)]"
+              className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl border border-red-500/35 bg-red-500/10 text-red-400 transition-colors hover:bg-red-500/20"
             >
               <Trash2 className="h-4 w-4" />
-            </button>
+            </motion.button>
           )}
         </div>
       </DialogContent>
