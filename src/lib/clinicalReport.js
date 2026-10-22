@@ -73,9 +73,9 @@ export function buildClinicalReport({ beats = [], vitals, durationS, patient, hi
 const M = 18;
 const W = 210;
 const H = 297;
-const INK = [26, 32, 44];
-const MUTED = [110, 120, 135];
-const ACCENT = [0, 170, 110];
+/** @type {[number, number, number]} */ const INK = [26, 32, 44];
+/** @type {[number, number, number]} */ const MUTED = [110, 120, 135];
+/** @type {[number, number, number]} */ const ACCENT = [0, 170, 110];
 const WARN = [200, 120, 0];
 const DANGER = [200, 45, 60];
 

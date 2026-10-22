@@ -146,12 +146,12 @@ export default function VitalScan() {
   /** Envía el informe en PDF al correo de la propia cuenta */
   const emailReport = async (rep) => {
     if (!user?.email) return;
-    await base44.integrations.Core.SendEmail({
+    await base44.integrations.Core.SendEmail(/** @type {any} */ ({
       to: user.email,
       subject: `Informe clínico PulseVector · ${new Date(rep.generatedAt).toLocaleDateString('es-ES')}`,
       body: 'Adjuntamos el informe clínico en PDF de tu última medición en PulseVector.',
       attachments: [{ filename: reportFileName(rep), content: reportPdfBase64(rep) }],
-    });
+    }));
   };
 
   const openEditor = (record) => {

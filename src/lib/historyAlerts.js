@@ -26,11 +26,11 @@ export async function loadHistorySummary(ownerId) {
     alertQuery({ $gte: 100 }), alertQuery({ $lt: 50 }),
     base44.entities.VitalRecord.count({ ...own, sqi: { $lt: 60 } }),
   ]);
-  const stats = aggregate.rows?.[0] || {};
+  const stats = /** @type {any} */ (aggregate)?.rows?.[0] || {};
   const averages = ROWS.map(([key, label, unit]) => ({ label, value: fmt(stats[`avg_${key}`]), unit }));
   const alerts = [];
   for (const [result, title] of [[high, 'Pulso medio elevado repetido'], [low, 'Pulso medio bajo repetido']]) {
-    const row = result.rows?.[0];
+    const row = /** @type {any} */ (result)?.rows?.[0];
     if (row?.count >= 2) alerts.push({
       level: 'warn', title, count: row.count, lastAt: row.max_created_date,
       detail: 'Umbral orientativo repetido en al menos dos mediciones con señal aceptada; requiere confirmación, no implica un diagnóstico ni acredita reposo.',

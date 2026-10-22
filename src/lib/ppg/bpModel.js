@@ -22,7 +22,7 @@ const K = {
   width: { sbp: 0.02, dbp: 0.03 },  // por ms
 };
 
-const clamp = (v, [lo, hi]) => Math.max(lo, Math.min(hi, v));
+const clamp = (v, range) => { const [lo, hi] = range; return Math.max(lo, Math.min(hi, v)); };
 
 export function estimateBloodPressure(features, calibration) {
   if (!features) return null;

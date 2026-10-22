@@ -28,7 +28,7 @@ export function useBeatCue() {
   /** Desbloquea el audio. Debe llamarse dentro del gesto del usuario que inicia la medición. */
   const unlock = useCallback(() => {
     try {
-      const AC = window.AudioContext || window.webkitAudioContext;
+      const AC = window.AudioContext || /** @type {any} */ (window).webkitAudioContext;
       if (!AC) return;
       if (!ctxRef.current) ctxRef.current = new AC();
       if (ctxRef.current.state === 'suspended') ctxRef.current.resume();

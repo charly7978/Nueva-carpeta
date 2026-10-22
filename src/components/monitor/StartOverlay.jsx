@@ -5,7 +5,9 @@ import IdlePanel from './IdlePanel';
 const EASE = [0.22, 1, 0.36, 1];
 
 /** Pantalla previa a la medición, sobre el monitor en espera. Se retira al empezar. */
-export default function StartOverlay({ appState, statusMsg, errorMsg, onRetry, ...idleProps }) {
+/** @param {any} props */
+export default function StartOverlay(props) {
+  const { appState, statusMsg, errorMsg, onRetry, ...idleProps } = props;
   if (appState === 'running') return null;
 
   return (

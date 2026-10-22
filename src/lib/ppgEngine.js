@@ -58,7 +58,7 @@ export class PPGEngine {
    * @param onFrame  (data) por fotograma — la interfaz lo limita a ~5 Hz
    * @param onVitals (vitals) en cada latido y como mínimo cada segundo
    * @param onStatus ({type})
-   * @param options  { extended, simulate, store }
+   * @param options  {{ extended?: boolean, simulate?: boolean, store?: any, onVideo?: any, onBeat?: any, calibration?: any, rhythm?: any }}
    */
   constructor(onFrame, onVitals, onStatus, options = {}) {
     this.extended = !!options.extended;
@@ -167,7 +167,7 @@ export class PPGEngine {
     try { caps = track && track.getCapabilities ? track.getCapabilities() : {}; } catch { caps = {}; }
     if (caps && caps.torch) {
       try {
-        await track.applyConstraints({ advanced: [{ torch: true }] });
+        await track.applyConstraints(/** @type {any} */ ({ advanced: [{ torch: true }] }));
         this.onStatus({ type: 'torch_on' });
       } catch {
         this.onStatus({ type: 'torch_unavailable' });
