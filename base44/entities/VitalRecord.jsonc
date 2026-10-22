@@ -1,0 +1,94 @@
+{
+  "name": "VitalRecord",
+  "type": "object",
+  "properties": {
+    "hr": {
+      "type": "number",
+      "title": "Heart Rate (bpm)"
+    },
+    "spo2": {
+      "type": "number",
+      "title": "SpO2 (%)"
+    },
+    "resp_rate": {
+      "type": "number",
+      "title": "Respiratory Rate (brpm)"
+    },
+    "sbp": {
+      "type": "number",
+      "title": "Systolic BP (mmHg)"
+    },
+    "dbp": {
+      "type": "number",
+      "title": "Diastolic BP (mmHg)"
+    },
+    "hrv_sdnn": {
+      "type": "number",
+      "title": "HRV SDNN (ms)"
+    },
+    "hrv_rmssd": {
+      "type": "number",
+      "title": "HRV RMSSD (ms)"
+    },
+    "hrv_lf_hf": {
+      "type": "number",
+      "title": "LF/HF Ratio"
+    },
+    "sqi": {
+      "type": "number",
+      "title": "Signal Quality Index (%)"
+    },
+    "duration_s": {
+      "type": "number",
+      "title": "Measurement Duration (s)"
+    },
+    "clean_duration_s": {
+      "type": "number",
+      "minimum": 0,
+      "title": "Continuous accepted signal duration (s)"
+    },
+    "notes": {
+      "type": "string",
+      "title": "Notes"
+    }
+  },
+  "required": [],
+  "rls": {
+    "read": {
+      "$or": [
+        {
+          "created_by_id": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "created_by_id": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "$or": [
+        {
+          "created_by_id": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    }
+  }
+}

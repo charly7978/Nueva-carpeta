@@ -1,0 +1,52 @@
+{
+  "name": "User",
+  "type": "object",
+  "properties": {
+    "role": {
+      "type": "string",
+      "description": "The role of the user in the app",
+      "enum": [
+        "admin",
+        "user"
+      ]
+    },
+    "bp_calibration": {
+      "type": "object",
+      "title": "Calibraci\u00f3n de presi\u00f3n arterial",
+      "description": "Anclaje de la presi\u00f3n estimada a una lectura de manguito",
+      "properties": {
+        "sbp": {
+          "type": "number",
+          "title": "Sist\u00f3lica de referencia (mmHg)"
+        },
+        "dbp": {
+          "type": "number",
+          "title": "Diast\u00f3lica de referencia (mmHg)"
+        },
+        "hr": {
+          "type": "number",
+          "title": "Pulso en la calibraci\u00f3n (lpm)"
+        },
+        "aix": {
+          "type": "number",
+          "title": "\u00cdndice de aumento en la calibraci\u00f3n"
+        },
+        "crest": {
+          "type": "number",
+          "title": "Tiempo de cresta en la calibraci\u00f3n (ms)"
+        },
+        "width": {
+          "type": "number",
+          "title": "Anchura de pulso en la calibraci\u00f3n (ms)"
+        },
+        "at": {
+          "type": "string",
+          "title": "Fecha de calibraci\u00f3n"
+        }
+      }
+    }
+  },
+  "required": [
+    "role"
+  ]
+}
