@@ -2,7 +2,7 @@
  * No synthetic beats, fixed colour-amplitude ratios or whole-window refiltering.
  */
 import { RingBuffer, median } from '@/lib/dsp';
-import { BiquadCascade, designCardiacFilter } from '@/lib/ppg/streamFilter';
+import { BiquadCascade, designCardiacFilter, designMorphologyFilter } from '@/lib/ppg/streamFilter';
 import { BeatTracker } from '@/lib/ppg/beatTracker';
 import { RhythmAnalyzer, IRREGULAR_KINDS } from '@/lib/ppg/rhythm';
 import { assessChannel, robustScale, MIN_PULSE_SCALE } from '@/lib/ppg/signalQuality';
@@ -25,6 +25,11 @@ export class PPGPipeline {
     this.hist = CH.map(() => new RingBuffer(FS * 8));
     this.dxh = CH.map(() => new RingBuffer(FS * 4));
     this.filters = CH.map(() => new BiquadCascade(designCardiacFilter(FS)));
+    // Canal de dibujo: mismo instante, filtro que NO deforma la morfología
+    this.morphHist = CH.map(() => new RingBuffer(FS * 4));
+    this.morphFilters = CH.map(() => new BiquadCascade(designMorphologyFilter(FS)));
+    this.morphScale = [0, 0, 0];
+    this.morphTarget = [0, 0, 0];
     this.tracker = new BeatTracker(FS);
     this.rhythm = new RhythmAnalyzer();
     this.artifacts = new ArtifactGuard();
@@ -81,6 +86,10 @@ export class PPGPipeline {
     this.hist.forEach(b => b.clear());
     this.dxh.forEach(b => b.clear());
     this.filters.forEach(f => f.reset());
+    this.morphFilters.forEach(f => f.reset());
+    this.morphHist.forEach(b => b.clear());
+    this.morphScale = [0, 0, 0];
+    this.morphTarget = [0, 0, 0];
     if (this.store) {
       if (!keepTrace) this.store.clear();
       this.store.beats = this.tracker.beats;
@@ -123,7 +132,7 @@ export class PPGPipeline {
       this.artifactUntil = Math.max(this.artifactUntil, t + 0.6);
     }
     if (!finger) {
-      if (this.store) this.store.push(t, NaN, wall);
+      if (this.store) this.store.push(t, NaN, wall, NaN, 0);
       this.prev = null;
       this.disturbed = false;
       this.artifacts.reset();
@@ -182,6 +191,7 @@ export class PPGPipeline {
     this.lastT = t;
     const alpha = 1 - Math.exp(-this.dt / BASE_TAU);
     const filtered = [0, 0, 0];
+    const morph = [0, 0, 0];
     let selectedArtifact = false;
     for (let c = 0; c < 3; c++) {
       this.base[c] = this.base[c] === null ? v[c] : this.base[c] + alpha * (v[c] - this.base[c]);
@@ -195,11 +205,16 @@ export class PPGPipeline {
       const clean = this._cleanSample(c, x);
       filtered[c] = this.filters[c].process(-clean);
       this.hist[c].push(filtered[c]);
+      // Mismo instante, otro filtro: el de morfología (0,1–10 Hz, orden 2), que
+      // conserva escotadura dicrótica, pico diastólico y frente sistólico.
+      morph[c] = this.morphFilters[c].process(-clean);
+      this.morphHist[c].push(morph[c]);
     }
     // Robust sorting at 5 Hz, rather than six sorts per camera sample.
     if (this.count % 6 === 0) {
       for (let c = 0; c < 3; c++) {
         this.targetScale[c] = robustScale(this.hist[c].tail(FS * 4));
+        this.morphTarget[c] = robustScale(this.morphHist[c].tail(FS * 4));
         const d = this.dxh[c].tail(FS * 4).sort((a, b) => a - b);
         this.dxScale[c] = this.count > FS * 2 ? Math.max(1e-6, d[Math.floor(d.length * 0.75)] || 0) : Infinity;
       }
@@ -207,9 +222,16 @@ export class PPGPipeline {
     // Smooth display gain continuously, never in 200-ms amplitude steps.
     // BeatTracker reconstructs the absolute signal before detecting extrema.
     const gainAlpha = 1 - Math.exp(-this.dt / 1.2);
+    // La ganancia del dibujo se mueve más despacio que la de detección: un cambio
+    // de amplitud no debe reescalar la onda visible. Y es LINEAL: escalar la traza
+    // completa conserva la forma; comprimirla muestra a muestra la destruye.
+    const morphAlpha = 1 - Math.exp(-this.dt / 2.4);
     for (let c = 0; c < 3; c++) {
       const target = Math.max(MIN_PULSE_SCALE, this.targetScale[c]);
       this.scale[c] = this.scale[c] > 0 ? this.scale[c] + gainAlpha * (target - this.scale[c]) : target;
+      const mTarget = Math.max(MIN_PULSE_SCALE, this.morphTarget[c]);
+      this.morphScale[c] = this.morphScale[c] > 0
+        ? this.morphScale[c] + morphAlpha * (mTarget - this.morphScale[c]) : mTarget;
     }
     if (selectedArtifact) this.artifactUntil = Math.max(this.artifactUntil, t + 0.8);
     const second = Math.floor(this.count / FS);
@@ -232,8 +254,16 @@ export class PPGPipeline {
     events.push(...this.tracker.push(t, y, ok, scale));
     if (ok && this.tracker.locked) this.lockSince ??= t;
     else this.lockSince = null;
-    if (this.store) this.store.push(t, this.contact && this.usable[this.sel]
-      && !this.disturbed && t >= this.artifactUntil ? y : NaN, wall);
+    // Trazado: la MORFOLOGÍA, no la señal de detección. `abs` viaja en % AC/DC
+    // para que los rótulos de pico, valle y escotadura sean fisiológicos y para
+    // que la meseta de saturación se vea tal cual, sin suavizarla.
+    const drawn = this.contact && this.usable[this.sel] && !this.disturbed && t >= this.artifactUntil;
+    const mScale = this.morphScale[this.sel];
+    const mVal = morph[this.sel];
+    if (this.store) {
+      this.store.push(t, drawn && mScale > 0 ? mVal / mScale : NaN, wall,
+        drawn ? mVal * 100 : NaN, mScale);
+    }
   }
 
   /** Delayed Hampel centre; its fixed delay cancels in inter-beat intervals. */
