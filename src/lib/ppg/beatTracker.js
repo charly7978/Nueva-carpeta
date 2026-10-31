@@ -428,10 +428,10 @@ export class BeatTracker {
     const shape = qs.length >= 4 ? mean(qs) : 0;
 
     const fresh = this._validIbis(2).length >= 2;
-    if (fresh && kept.length >= 4 && this.cv < 0.14 && good >= 0.75 && shape >= 0.75) {
+    if (fresh && kept.length >= 4 && this.cv < 0.16 && good >= 0.4 && shape >= 0.4) {
       this.locked = true;
       this.everLocked = true;
-    } else if (kept.length < 4 || this.cv > 0.2 || good < 0.55 || shape < 0.6) {
+    } else if (kept.length < 4 || this.cv > 0.22 || good < 0.3 || shape < 0.3) {
       this.locked = false;
     }
     if (this.locked && (smooth || this.hrSmooth == null)) {
@@ -478,9 +478,26 @@ export class BeatTracker {
        b.q = q;
        b.w = clamp(q * (1 - 0.7 * (b.noise ?? 0)), 0.2, 1);
 
-       if (!this.template) {
-        this.template = vec;
-      } else if (q >= 0.8) {
+       if (q < 0.3) {
+         b.bad = true;
+         this.badRun++;
+         if (this.badRun >= 6) { this.template = vec; this.badRun = 0; }
+         this._updateHR(this.lastT, false);
+       } else {
+         this.badRun = 0;
+         b.confirmed = true;
+         b.id = ++this.beatCount;
+         this.lastConfirmed = b;
+         this.proms.push(b.prom);
+         this.steeps.push(b.steep);
+         if (this.proms.length > 8) this.proms.shift();
+         if (this.steeps.length > 8) this.steeps.shift();
+         if (this.sessMaxPeak === null || b.pk > this.sessMaxPeak) this.sessMaxPeak = b.pk;
+         if (this.sessMinValley === null || b.vl < this.sessMinValley) this.sessMinValley = b.vl;
+         this._updateHR(this.lastT, true);
+         events.push({ type: 'beat', beat: b });
+       }
+      if (q >= 0.8) {
         const blend = new Float32Array(vec.length);
         let nrm = 0;
         for (let i = 0; i < vec.length; i++) { blend[i] = 0.8 * this.template[i] + 0.2 * vec[i]; nrm += blend[i] * blend[i]; }
@@ -488,27 +505,7 @@ export class BeatTracker {
         for (let i = 0; i < vec.length; i++) blend[i] /= nrm;
         this.template = blend;
       }
-      this.prevWin = vec;
-
-      if (q < 0.65) {
-        b.bad = true;
-        this.badRun++;
-        if (this.badRun >= 6) { this.template = vec; this.badRun = 0; }
-        this._updateHR(this.lastT, false);
-      } else {
-        this.badRun = 0;
-        b.confirmed = true;
-        b.id = ++this.beatCount;
-        this.lastConfirmed = b;
-        this.proms.push(b.prom);
-        this.steeps.push(b.steep);
-        if (this.proms.length > 8) this.proms.shift();
-        if (this.steeps.length > 8) this.steeps.shift();
-        if (this.sessMaxPeak === null || b.pk > this.sessMaxPeak) this.sessMaxPeak = b.pk;
-        if (this.sessMinValley === null || b.vl < this.sessMinValley) this.sessMinValley = b.vl;
-        this._updateHR(this.lastT, true);
-        events.push({ type: 'beat', beat: b });
-      }
+       this.prevWin = vec;
     }
   }
 

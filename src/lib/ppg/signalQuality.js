@@ -55,9 +55,18 @@ export function assessChannel(rawSamples, filteredSamples, scale, fs, usable, pr
   const concentration = total > 1e-15 ? pulse / total : 0;
   const ambiguous = ac.ambiguous;
   const holding = previous?.viable === true;
+  const tremorActive = tremorRatio > 0.1;
+  // Bajo temblor se relajan los umbrales de SNR/concentración/fuerza para no cerrar la puerta;
+  // sin temblor se mantienen estrictos (protección contra reflexión/lóbulo secundario).
+  const snrEnter = tremorActive ? 1.8 : (holding ? 2 : 2.5);
+  const snrHold = tremorActive ? 1.5 : (holding ? 1.8 : 2);
+  const concEnter = tremorActive ? 0.3 : (holding ? 0.3 : 0.4);
+  const concHold = tremorActive ? 0.25 : (holding ? 0.3 : 0.3);
+  const strEnter = tremorActive ? 0.2 : (holding ? 0.2 : 0.3);
+  const strHold = tremorActive ? 0.15 : (holding ? 0.2 : 0.2);
   const viable = holding
-    ? snr >= 1.8 && tremorRatio <= 1.6 && concentration >= 0.3 && ac.strength >= 0.2
-    : snr >= 2.2 && tremorRatio <= MIN_TREMOR_RATIO && concentration >= 0.4 && ac.strength >= 0.3;
+    ? snr >= snrHold && tremorRatio <= 1.6 && concentration >= concHold && ac.strength >= strHold
+    : snr >= snrEnter && tremorRatio <= MIN_TREMOR_RATIO && concentration >= concEnter && ac.strength >= strEnter;
   const value = ac.strength * concentration * Math.min(1, snr / 6);
   const accepted = viable && !ambiguous;
   const penalty = 1 / (1 + 1.5 * tremorRatio);

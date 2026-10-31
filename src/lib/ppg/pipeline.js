@@ -402,10 +402,11 @@ export class PPGPipeline {
     const evidence = this.evidence[this.sel];
     const gate = this.finger && this.contact && this.usable[this.sel] && this.sigOk && this.qualityOk
       && !this.disturbed && t >= this.artifactUntil && !s.stale;
+    const cleanGate = gate && this.qualityOk;
     const intervalHR = s.hr ?? s.hrPreview;
     const agrees = evidence?.hz > 0 && intervalHR > 0
       && Math.abs(intervalHR / 60 - evidence.hz) <= 0.15 * evidence.hz;
-    const confirmed = gate && s.locked && agrees && s.quality >= 75 && this.periodicity >= 0.35
+    const confirmed = gate && s.locked && agrees && s.quality >= 30 && this.periodicity >= 0.3
       && this.lockSince !== null && t - this.lockSince >= (s.everLocked ? 0.35 : 1);
     const currentBeats = this.tracker.beats.filter(beat => beat.t > this.tracker.invalidAt);
     const rhythm = this.rhythm.update(currentBeats, t, gate);
