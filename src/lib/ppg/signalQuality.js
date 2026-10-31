@@ -17,18 +17,32 @@ export function robustScale(samples) {
  * Raw curvature and measured-cycle residuals estimate noise without treating
  * fast pulse harmonics as sensor noise. Filtering alone is never evidence.
  */
-export function assessChannel(rawSamples, filteredSamples, scale, fs, usable, previous = null) {
-  const empty = { score: 0, strength: 0, hz: 0, snr: 0, concentration: 0, viable: false, ambiguous: false };
-  if (!usable || rawSamples.length < fs * 4 || scale < MIN_PULSE_SCALE) return empty;
-  // Shorten evidence only after a fast pulse has been independently acquired.
-  // Keep the longer window at rest and during initial acquisition.
+export const MIN_TREMOR_RATIO = 1.2;
+export const MAX_TREMOR_CONFIDENCE_PENALTY = 1.5;
+
+export function assessChannel(rawSamples, filteredSamples, scale, fs, usable, previous = null, noise = null) {
+  const empty = { score: 0, strength: 0, hz: 0, snr: 0, snrBroad: 0, concentration: 0, viable: false, ambiguous: false, tremorRatio: 0, noiseInBand: 0, noiseOutBand: 0 };
+  if (!usable || rawSamples.length < fs * 4 || scale < MIN_PULSE_SCALE) {
+    return { ...empty, snr: 0, tremorRatio: noise?.tremor ?? 0 };
+  }
   const seconds = previous?.viable && previous.hz >= 1.5 ? 4 : 8;
   const raw = rawSamples.slice(-fs * seconds), filtered = filteredSamples.slice(-fs * seconds);
   const { freqs, magnitudes } = powerSpectrum(detrend(raw), fs);
   const ac = pulsePeriod(filtered, fs, freqs, magnitudes, raw);
-  const noise = pulseNoise(raw, fs, ac);
-  const snr = scale / Math.max(3e-5, noise);
-  if (!ac.hz) return { ...empty, snr };
+  // Ruido en banda: si se pasa noise, usarlo; si no, legado (curvatura sobre crudo).
+  let inBandNoise;
+  let tremorRatio = 0;
+  if (noise) {
+    inBandNoise = noise.inBand;
+    tremorRatio = noise.tremor ?? 0;
+  } else {
+    const legacy = pulseNoise(raw, fs, ac);
+    inBandNoise = legacy;
+    tremorRatio = 0;
+  }
+  const snrBroad = scale / Math.max(3e-5, (noise ? (noise.inBand + noise.outBand) : inBandNoise));
+  const snr = scale / Math.max(3e-5, inBandNoise || 3e-5);
+  if (!ac.hz) return { ...empty, snr, snrBroad, tremorRatio, noiseInBand: inBandNoise, noiseOutBand: noise?.outBand ?? 0 };
   const width = Math.max(0.15, fs / raw.length);
   let total = 0, pulse = 0;
   for (let i = 0; i < freqs.length; i++) {
@@ -40,14 +54,18 @@ export function assessChannel(rawSamples, filteredSamples, scale, fs, usable, pr
   }
   const concentration = total > 1e-15 ? pulse / total : 0;
   const ambiguous = ac.ambiguous;
-  // Schmitt thresholds: marginal spectral fluctuations must not repeatedly
-  // erase an otherwise validated acquisition. Gross noise still closes the gate.
   const holding = previous?.viable === true;
   const viable = holding
-    ? snr >= 2 && concentration >= 0.3 && ac.strength >= 0.2
-    : snr >= 2.5 && concentration >= 0.4 && ac.strength >= 0.3;
+    ? snr >= 1.8 && tremorRatio <= 1.6 && concentration >= 0.3 && ac.strength >= 0.2
+    : snr >= 2.2 && tremorRatio <= MIN_TREMOR_RATIO && concentration >= 0.4 && ac.strength >= 0.3;
   const value = ac.strength * concentration * Math.min(1, snr / 6);
   const accepted = viable && !ambiguous;
-  const score = accepted ? (previous?.viable ? 0.65 * previous.score + 0.35 * value : value) : 0;
-  return { score, strength: ac.strength, hz: ac.hz, snr, concentration, viable: accepted, ambiguous, lobed: ac.lobed };
+  const penalty = 1 / (1 + 1.5 * tremorRatio);
+  const valuePenalized = value * penalty;
+  const score = accepted ? (previous?.viable ? 0.65 * previous.score + 0.35 * valuePenalized : valuePenalized) : 0;
+  return {
+    score, strength: ac.strength, hz: ac.hz, snr, snrBroad, concentration,
+    viable: accepted, ambiguous, lobed: ac.lobed, tremorRatio,
+    noiseInBand: inBandNoise, noiseOutBand: noise?.outBand ?? 0,
+  };
 }

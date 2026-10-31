@@ -65,6 +65,11 @@ export function designCardiacFilter(fs) {
   return [...designButterworthBandpass(0.5, 4.5, fs), designLowpass(4.0, fs)];
 }
 
+/** Pasabanda 4.5–12 Hz: mide temblor, jamás decide latidos. */
+export function designTremorFilter(fs) {
+  return [designHighpass(4.5, fs), designLowpass(12, fs)];
+}
+
 /**
  * Canal de MORFOLOGÍA (solo se dibuja; nunca decide latidos).
  * Lapitan, Glazkov & Rogatkin (2021), «Influence of digital filtering parameters

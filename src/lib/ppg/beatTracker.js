@@ -47,6 +47,7 @@ export class BeatTracker {
     this.Y = new Float32Array(CAP);
     this.T = new Float64Array(CAP);
     this.S = new Float32Array(CAP);   // escala absoluta (AC/DC) de cada muestra
+    this.W = new Float32Array(CAP);   // peso de confianza 0..1
     this.V = new Uint8Array(CAP);
     this.beats.length = 0;
     this.ibis = [];
@@ -62,11 +63,14 @@ export class BeatTracker {
     this.beatCount = 0;
     this.hintHz = 0;
     this.hintLobed = false;
+    this.hintStrength = 0;
     this.invalidAt = -Infinity;
     this.lastConfirmed = null;
     this.hrIbi = 0;
     this.cv = 1;
     this.validCount = 0;
+    this.harmonic = null;
+    this.hrFromSpectrum = null;
     this.hrSmooth = null;
     this.lastHrUpdate = null;
     this.locked = false;
@@ -85,6 +89,7 @@ export class BeatTracker {
     this.Y.fill(0);
     this.T.fill(0);
     this.S.fill(0);
+    this.W.fill(0);
     this.V.fill(0);
     this.invalidAt = -Infinity;
     this.lastConfirmed = null;
@@ -110,18 +115,31 @@ export class BeatTracker {
     this.prevRawIbi = 0;
   }
 
-  _y(k) { return this.Y[k % CAP]; }
-  _t(k) { return this.T[k % CAP]; }
+  /**
+   * Marca una frontera de artefacto sin destruir el historial de intervalos.
+   * Los intervalos que la cruzan quedan marcados como sus (sospechosos).
+   */
+  markBoundary(t) {
+    this.invalidAt = t;
+  }
+
+  /** Re-siembra sólo la plantilla de forma tras un cambio de canal. */
+  resetTemplate() {
+    this.template = null;
+    this.prevWin = null;
+    this.badRun = 0;
+  }
+   _y(k) { return this.Y[k % CAP]; }
+   _t(k) { return this.T[k % CAP]; }
 
   // ── Entrada de una muestra ─────────────────────────────────
   /** @param scale escala absoluta (fracción AC/DC) de la muestra, para dar valores reales */
-  push(t, y, ok = true, scale = 1) {
+  push(t, y, ok = true, scale = 1, weight = 1) {
     const i = this.n % CAP;
     this.T[i] = t;
-    // Detection operates in physical AC/DC units. Display AGC must never create
-    // an extremum, alter morphology, or change the timing of a heartbeat.
     this.Y[i] = y * scale;
     this.S[i] = scale;
+    this.W[i] = weight;
     this.V[i] = ok ? 1 : 0;
     this.n++;
     this.lastT = t;
@@ -130,11 +148,7 @@ export class BeatTracker {
     if (!ok) {
       this.invalidAt = t;
       this.locked = false;
-      // hrSmooth survives a single invalid sample: clearing it would restart the
-      // smoothing from scratch and make the published rate jump. The staleness
-      // check still retires a reading that stops being supported by beats.
-      this.pending.length = 0;
-      this.outliers.length = 0;
+      // Un !ok aislado ya no vacía pending/outliers (sólo prevRawIbi = 0).
       this.prevRawIbi = 0;
     }
     if (ok && this.n >= 6) this._checkPeak(this.n - 3);
@@ -163,7 +177,37 @@ export class BeatTracker {
     return ibi >= 0.72 * basis && ibi <= 1.38 * basis;
   }
 
-  // ── Detección de pico ──────────────────────────────────────
+  _resolveLobe(kept) {
+    if (!this.hintHz || (this.hintStrength || 0) < 0.7 || !kept || kept.length < 4) {
+      return { factor: 1, confidence: 0 };
+    }
+    const doubleHz = 2 * this.hintHz;
+    const last4 = kept.slice(-4);
+    const allDouble = last4.every((v) => {
+      const hz = 1 / v;
+      return hz >= 0.88 * doubleHz && hz <= 1.12 * doubleHz;
+    });
+    if (!allDouble) return { factor: 1, confidence: 0 };
+    return { factor: 2, confidence: Math.min(1, this.hintStrength) };
+  }
+  _upstrokeCross(pIdx, footIdx, troughValue, peakValue) {
+    const half = troughValue + 0.5 * (peakValue - troughValue);
+    let prevK = footIdx;
+    let prevV = this._y(footIdx);
+    for (let k = footIdx + 1; k <= pIdx; k++) {
+      const v = this._y(k);
+      if (prevV <= half && v >= half) {
+        const frac = (half - prevV) / (v - prevV + 1e-12);
+        const tPrev = this._t(prevK);
+        const tCurr = this._t(k);
+        return tPrev + frac * (tCurr - tPrev);
+      }
+      prevK = k;
+      prevV = v;
+    }
+    return this._t(pIdx);
+  }
+
   _checkPeak(p) {
     const y0 = this._y(p);
     const ym = this._y(p - 1);
@@ -210,19 +254,31 @@ export class BeatTracker {
     if (!(scale > 0)) return;
     const prom = look >= 3 ? yv - trough : 0;
 
+    const tm = this._upstrokeCross(p, tk, trough, yv);
+
     const vt = this._t(tk);
     // Rounded sample windows plus parabolic peak timing can extend the bound
     // by one sample. Without this tolerance, clean single-lobed pulses vanish.
     if (tp - vt < 0.065 || tp - vt > Math.min(1.1, 0.7 * period) + 1 / this.fs) return;
     for (let k = tk; k <= p + 2; k++) if (!this.V[k % CAP]) return;
-    const c = {
-      t: tp, idx: p, y: y0 / scale, yv: yv / scale, prom,
-      // Relative rise speed, independent of perfusion/amplitude modulation.
-      steep: 1 / Math.max(1 / this.fs, tp - vt),
-      vt, vy: trough / Math.max(1e-12, this.S[tk % CAP]),
-      pk: yv * 100,                         // actual filtered % AC/DC
-      vl: trough * 100,
-    };
+    // Muestras inválidas entre pie y pico: umbral 20 % (no rechazo total).
+    let invalidBetween = 0, totalBetween = 0;
+    for (let k = tk; k <= p; k++) { totalBetween++; if (!this.V[k % CAP]) invalidBetween++; }
+    const noiseFrac = totalBetween > 0 ? invalidBetween / totalBetween : 0;
+    if (noiseFrac > 0.2) return;
+    // Peso de confianza por muestras de baja calidad (W < 0.5) entre pie y pico.
+    let lowWeight = 0;
+    for (let k = tk; k <= p; k++) if (this.W[k % CAP] < 0.5) lowWeight++;
+    const weightNoise = totalBetween > 0 ? lowWeight / totalBetween : 0;
+     const c = {
+       t: tp, idx: p, y: y0 / scale, yv: yv / scale, prom,
+       // Relative rise speed, independent of perfusion/amplitude modulation.
+       steep: 1 / Math.max(1 / this.fs, tp - vt),
+       vt, vy: trough / Math.max(1e-12, this.S[tk % CAP]),
+       pk: yv * 100,                         // actual filtered % AC/DC
+       vl: trough * 100,
+       tm, noise: weightNoise,
+     };
 
     // A two-beat pattern can dominate autocorrelation. It must not impose a
     // long refractory interval that systematically deletes premature pulses.
@@ -260,7 +316,9 @@ export class BeatTracker {
 
   _accept(c) {
     const prev = this.lastBeat;
-    const ibi = prev ? c.t - prev.t : null;
+     const prevTm = prev ? (prev.tm != null ? prev.tm : prev.t) : null;
+     const curTm = c.tm != null ? c.tm : c.t;
+     const ibi = prev ? curTm - prevTm : null;
     const ref0 = this._refRR();
 
     // ¿El intervalo cruza muestras inválidas? Entonces no es un dato de ritmo fiable
@@ -279,21 +337,23 @@ export class BeatTracker {
     }
 
     const period = ref0 || (this.hintHz > 0 ? 1 / this.hintHz : ibi || 0.8);
-    const beat = {
-      id: null,
-      pre: Math.max(2, Math.round(this.fs * Math.min(0.24, 0.28 * period))),
-      post: Math.max(3, Math.round(this.fs * Math.min(0.32, 0.42 * period))),
-      settle: this.hintLobed && !this.lastConfirmed ? Math.ceil(this.fs * 0.58 / this.hintHz) : 0,
-      t: c.t, idx: c.idx, y: c.yv, prom: c.prom, steep: c.steep,
-      vt: c.vt, vy: c.vy,
-      pk: c.pk, vl: c.vl, amp: c.pk - c.vl,
-      ibi,
-      ibiValid: false,
-      q: null,
-      bad: false,
-      confirmed: false,
-      sus, ratio, rhy,
-    };
+     const beat = {
+       id: null,
+       pre: Math.max(2, Math.round(this.fs * Math.min(0.24, 0.28 * period))),
+       post: Math.max(3, Math.round(this.fs * Math.min(0.32, 0.42 * period))),
+       settle: this.hintLobed && !this.lastConfirmed ? Math.ceil(this.fs * 0.58 / this.hintHz) : 0,
+       t: c.t, tm: c.tm != null ? c.tm : c.t, idx: c.idx, y: c.yv, prom: c.prom, steep: c.steep,
+       vt: c.vt, vy: c.vy,
+       pk: c.pk, vl: c.vl, amp: c.pk - c.vl,
+       ibi,
+       ibiValid: false,
+       q: null,
+       bad: false,
+       confirmed: false,
+       sus, ratio, rhy,
+       noise: c.noise ?? 0,
+       w: 1,
+     };
 
     if (prev) {
       beat.ibiValid = !sus && this._classify(beat.ibi);
@@ -325,33 +385,50 @@ export class BeatTracker {
 
   // ── FC desde los intervalos validados ──────────────────────
   _updateHR(t, smooth) {
-    const list = this._validIbis(8, false).filter((e) => t - e.t < 14).map((e) => e.v);
+    const entries = this._validIbis(8, false).filter((e) => t - e.t < 14);
+    const list = entries.map((e) => e.v);
     if (list.length < 3) {
       this.validCount = list.length;
       if (list.length < 3) this.locked = false;
       return;
     }
     const m = median(list);
-    const kept = list.filter((v) => Math.abs(v - m) <= 0.2 * m);
-    const mu = mean(kept);
-    // Keep eight intervals for validation, but estimate current HR from the
-    // latest five: old recovery/workload intervals must not dominate exercise HR.
-    this.hrIbi = 60 / mean(kept.slice(-5));
-    this.cv = sd(kept) / mu;
+    const keptEntries = entries.filter((e) => Math.abs(e.v - m) <= 0.2 * m);
+    const kept = keptEntries.map((e) => e.v);
+    const weights = keptEntries.map((e) => (e.b && e.b.w != null ? e.b.w : 1));
+    const wSum = weights.reduce((a, b) => a + b, 0) || 1;
+    const wMean = (vals, ws) => {
+      let s = 0, sw = 0;
+      for (let i = 0; i < vals.length; i++) { s += vals[i] * ws[i]; sw += ws[i]; }
+      return sw > 0 ? s / sw : (vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : 0);
+    };
+    const mu = wMean(kept, weights);
+    // hrIbi from last 5 (weighted)
+    const last5Entries = keptEntries.slice(-5);
+    const last5Vals = last5Entries.map((e) => e.v);
+    const last5Weights = last5Entries.map((e) => (e.b && e.b.w != null ? e.b.w : 1));
+    this.hrIbi = 60 / Math.max(1e-9, wMean(last5Vals, last5Weights));
+    this.cv = Math.sqrt(kept.reduce((s, v) => s + (v - mu) ** 2, 0) / Math.max(1, kept.length - 1)) / mu;
     this.validCount = kept.length;
 
-    // Fracción de latidos recientes con intervalo válido: el ruido de banda
-    // estrecha produce picos "casi" regulares, pero nunca una secuencia limpia.
+    // Arbitraje de armónico: si los intervalos son ≈2× el espectro, es doble conteo.
+    const lobe = this._resolveLobe(kept);
+    if (lobe.factor === 2) {
+      this.harmonic = 'double';
+      this.hrFromSpectrum = 60 * this.hintHz;
+      this.hrIbi = 60 * this.hintHz;
+    } else {
+      this.harmonic = null;
+      this.hrFromSpectrum = null;
+    }
     const recent = this.beats.slice(-13).filter(b => b.ibi != null && !b.sus && b.t > this.invalidAt && b.q != null);
     const good = recent.length ? recent.filter(b => b.ibiValid && b.confirmed && !b.bad && !b.sus).length / recent.length : 0;
 
-    // Semejanza de forma de los últimos pulsos: el ruido filtrado da picos casi
-    // regulares pero con forma distinta cada vez; un pulso real se repite.
     const qs = this.beats.slice(-6).filter(b => b.confirmed && t - b.t < 10).map(b => b.q);
     const shape = qs.length >= 4 ? mean(qs) : 0;
 
     const fresh = this._validIbis(2).length >= 2;
-    if (fresh && kept.length >= 5 && this.cv < 0.12 && good >= 0.75 && shape >= 0.78) {
+    if (fresh && kept.length >= 4 && this.cv < 0.14 && good >= 0.75 && shape >= 0.75) {
       this.locked = true;
       this.everLocked = true;
     } else if (kept.length < 4 || this.cv > 0.2 || good < 0.55 || shape < 0.6) {
@@ -398,9 +475,10 @@ export class BeatTracker {
         // La plantilla estaba mal sembrada: dos pulsos seguidos coherentes la reemplazan
         if (qt < 0.5 && qp >= 0.85) this.template = vec;
       }
-      b.q = q;
+       b.q = q;
+       b.w = clamp(q * (1 - 0.7 * (b.noise ?? 0)), 0.2, 1);
 
-      if (!this.template) {
+       if (!this.template) {
         this.template = vec;
       } else if (q >= 0.8) {
         const blend = new Float32Array(vec.length);
@@ -439,8 +517,11 @@ export class BeatTracker {
     this._updateHR(t, false);
     const age = this.lastConfirmed ? t - this.lastConfirmed.t : Infinity;
     const ref = this._refRR() || 1;
-    const stale = !this.lastConfirmed || this.lastConfirmed.t <= this.invalidAt
-      || age > Math.max(3.2, 2.6 * ref);
+    const recentBeats = this.beats.filter(b => b.confirmed && b.t > this.invalidAt).slice(-8);
+    const recentValid = recentBeats.filter(b => b.ibiValid && !b.bad && !b.sus).length;
+    const recentFrac = recentBeats.length ? recentValid / recentBeats.length : 0;
+    const stale = !this.lastConfirmed || age > Math.max(3.2, 2.6 * ref)
+      || (recentBeats.length >= 4 && recentFrac < 0.4 && age > 1.5);
     if (stale) { this.locked = false; this.hrSmooth = null; }
 
     const recent = this.beats.filter(b => b.confirmed && b.t > this.invalidAt).slice(-8);
@@ -468,6 +549,8 @@ export class BeatTracker {
       ibiMs: lastValid ? Math.round(lastValid.v * 1000) : null,
       beatCount: this.beatCount,
       everLocked: this.everLocked,
+      harmonic: this.harmonic,
+      hrFromSpectrum: this.hrFromSpectrum,
       lastBeat: lb && lb.t > this.invalidAt
         ? {
           id: lb.id,

@@ -60,9 +60,9 @@ test('irregular fallback cannot publish a double-rate conflict', () => {
 test('published HR is slew-limited and held through brief dropouts', () => {
   const p = new PPGPipeline();
   assert.equal(p._displayHR(120, 0), 120);
-  assert.equal(p._displayHR(200, 0.2), 122);   // ≤9 lpm/s
-  assert.equal(p._displayHR(null, 0.4), 122);  // held, not blanked
-  assert.equal(p._displayHR(null, 3), null);   // retired once unsupported
+  assert.equal(p._displayHR(200, 0.2), 121);   // ≤5 lpm/s
+  assert.equal(p._displayHR(null, 0.4), 121);  // held, not blanked
+  assert.equal(p._displayHR(null, 4), null);   // retired once unsupported
 });
 
 test('a cuff reading anchors the optical estimate and narrows its band', () => {

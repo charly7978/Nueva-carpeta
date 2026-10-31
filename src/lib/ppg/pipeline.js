@@ -2,10 +2,11 @@
  * No synthetic beats, fixed colour-amplitude ratios or whole-window refiltering.
  */
 import { RingBuffer, median, mean, populationStd as sd } from '@/lib/dsp';
-import { BiquadCascade, designCardiacFilter, designMorphologyFilter } from '@/lib/ppg/streamFilter';
+import { BiquadCascade, designCardiacFilter, designMorphologyFilter, designTremorFilter } from '@/lib/ppg/streamFilter';
 import { BeatTracker } from '@/lib/ppg/beatTracker';
 import { RhythmAnalyzer, IRREGULAR_KINDS } from '@/lib/ppg/rhythm';
 import { assessChannel, robustScale, MIN_PULSE_SCALE } from '@/lib/ppg/signalQuality';
+import { bandNoise } from '@/lib/ppg/bandNoise';
 import commonModeArtifact from '@/lib/ppg/colourEvidence';
 import { detectPulseFeatures } from '@/lib/ppg/pulseFeatures';
 import { ArtifactGuard } from '@/lib/ppg/artifactGuard';
@@ -26,11 +27,15 @@ export class PPGPipeline {
     this.hist = CH.map(() => new RingBuffer(FS * 8));
     this.dxh = CH.map(() => new RingBuffer(FS * 4));
     this.filters = CH.map(() => new BiquadCascade(designCardiacFilter(FS)));
+    // Rama de temblor (4.5–12 Hz): mide vibración, nunca decide latidos.
+    this.tremorFilters = CH.map(() => new BiquadCascade(designTremorFilter(FS)));
+    this.tremorHist = CH.map(() => new RingBuffer(FS * 3));
     // Canal de dibujo: mismo instante, filtro que NO deforma la morfología
     this.morphHist = CH.map(() => new RingBuffer(FS * 4));
     this.morphFilters = CH.map(() => new BiquadCascade(designMorphologyFilter(FS)));
     this.morphScale = [0, 0, 0];
     this.morphTarget = [0, 0, 0];
+    this.tremorScale = [0, 0, 0];
     this.tracker = new BeatTracker(FS);
     this.rhythm = new RhythmAnalyzer();
     this.artifacts = new ArtifactGuard();
@@ -86,16 +91,18 @@ export class PPGPipeline {
 
     this.commonMode = false;
     this.sigOk = false;
-    this._pkFor = null;
+    this.qualityOk = false;
     this._pk = null;
     this.bufX.forEach(b => b.clear());
     this.hist.forEach(b => b.clear());
     this.dxh.forEach(b => b.clear());
     this.filters.forEach(f => f.reset());
-    this.morphFilters.forEach(f => f.reset());
+    this.tremorFilters.forEach(f => f.reset());
+    this.tremorHist.forEach(b => b.clear());
     this.morphHist.forEach(b => b.clear());
     this.morphScale = [0, 0, 0];
     this.morphTarget = [0, 0, 0];
+    this.tremorScale = [0, 0, 0];
     if (this.store) {
       if (!keepTrace) this.store.clear();
       this.store.beats = this.tracker.beats;
@@ -132,7 +139,8 @@ export class PPGPipeline {
     if (!this.usable[this.sel] && this.usable.some(Boolean)) {
       this.sel = this.usable.findIndex(Boolean);
       this.selSince = t;
-      this.tracker.dropAcquisition();
+      this.tracker.markBoundary(t);
+      this.tracker.resetTemplate();
       this.rhythm.reset();
       this.lockSince = null;
       this.artifactUntil = Math.max(this.artifactUntil, t + 0.6);
@@ -161,7 +169,8 @@ export class PPGPipeline {
       }
     }
     const cur = [r, g, b];
-    const disturbed = this.artifacts.update(t, cur, this.usable, optical.spatial, this.contact, this.sel);
+    const level = this.artifacts.update(t, cur, this.usable, optical.spatial, this.contact, this.sel);
+    const disturbed = t < this.artifacts.until;
     // Brief disturbances invalidate intervals, not all acquisition history.
     // A sustained disruption resets ONCE, never again on quarantine exit.
     if (this.artifacts.bad) {
@@ -192,7 +201,14 @@ export class PPGPipeline {
     // A dark/noisy blue channel must not reset a clean red/green pulse.
     const steps = v.map((value, c) => this.usable[c] && this.base[c] > 12
       && Math.abs(value - this.base[c]) > Math.max(3, 0.15 * this.base[c]));
-    if (steps[this.sel] || steps.filter(Boolean).length >= 2) this._dropSignal(t, true);
+    if (steps[this.sel] || steps.filter(Boolean).length >= 2) {
+      // Salto de DC > 15 %: re-siembra base, marca frontera, sigue (no _dropSignal).
+      for (let c = 0; c < 3; c++) {
+        if (steps[c]) this.base[c] = v[c];
+      }
+      this.tracker.markBoundary(t);
+      // no reset de adquisición completa
+    }
     this.count++;
     this.lastT = t;
     const alpha = 1 - Math.exp(-this.dt / BASE_TAU);
@@ -208,10 +224,13 @@ export class PPGPipeline {
       this.dxh[c].push(dx);
       if (c === this.sel && (Math.abs(raw) > X_CLAMP || dx > Math.max(0.0006, 8 * this.dxScale[c]))) selectedArtifact = true;
       this.bufX[c].push(x);
-      const clean = this._cleanSample(c, x);
-      filtered[c] = this.filters[c].process(-clean);
-      this.hist[c].push(filtered[c]);
-      // Mismo instante, otro filtro: el de morfología (0,1–10 Hz, orden 2), que
+       const clean = this._cleanSample(c, x);
+       filtered[c] = this.filters[c].process(-clean);
+       this.hist[c].push(filtered[c]);
+       // Rama de temblor (ortogonal): mide vibración 4.5–12 Hz sobre la misma muestra limpia.
+       const tremorSample = this.tremorFilters[c].process(-clean);
+       this.tremorHist[c].push(tremorSample);
+       // Mismo instante, otro filtro: el de morfología (0,1–10 Hz, orden 2), que
       // conserva escotadura dicrótica, pico diastólico y frente sistólico.
       morph[c] = this.morphFilters[c].process(-clean);
       this.morphHist[c].push(morph[c]);
@@ -219,9 +238,10 @@ export class PPGPipeline {
     // Robust sorting at 5 Hz, rather than six sorts per camera sample.
     if (this.count % 6 === 0) {
       for (let c = 0; c < 3; c++) {
-        this.targetScale[c] = robustScale(this.hist[c].tail(FS * 4));
-        this.morphTarget[c] = robustScale(this.morphHist[c].tail(FS * 4));
-        const d = this.dxh[c].tail(FS * 4).sort((a, b) => a - b);
+       this.targetScale[c] = robustScale(this.hist[c].tail(FS * 4));
+       this.morphTarget[c] = robustScale(this.morphHist[c].tail(FS * 4));
+       this.tremorScale[c] = robustScale(this.tremorHist[c].tail(FS * 2));
+       const d = this.dxh[c].tail(FS * 4).sort((a, b) => a - b);
         this.dxScale[c] = this.count > FS * 2 ? Math.max(1e-6, d[Math.floor(d.length * 0.75)] || 0) : Infinity;
       }
     }
@@ -247,23 +267,29 @@ export class PPGPipeline {
     }
     const scale = this.scale[this.sel];
     const samplingOk = this.frameIntervals.length >= 12 && this.frameInterval <= 1 / 12;
+    const ev = this.evidence[this.sel];
     this.sigOk = this.ready && samplingOk && this.contact && this.usable[this.sel]
-      && this.targetScale[this.sel] >= MIN_PULSE_SCALE && !!this.evidence[this.sel]?.viable && !this.commonMode;
+      && this.targetScale[this.sel] >= MIN_PULSE_SCALE && !!ev && ev.hz > 0 && !this.commonMode;
+    this.qualityOk = this.sigOk && !!ev?.viable && !this.commonMode;
     const y = scale > 0 ? filtered[this.sel] / scale : 0;
     if (Math.abs(filtered[this.sel]) > 5.5 * Math.max(scale, this.targetScale[this.sel])) {
       this.artifactUntil = Math.max(this.artifactUntil, t + 0.8);
     }
     const ok = this.sigOk && !this.disturbed && t >= this.artifactUntil;
+    const gross = this.artifacts.level === 2;
+    // weight de confianza por calidad (temblor, SNR en banda)
+    const tremorRatio = this.evidence[this.sel]?.tremorRatio ?? 0;
+    const weight = this.qualityOk ? Math.max(0.25, Math.min(1, 1 - 0.6 * tremorRatio)) : 0.3;
     this.cleanSince = ok ? (this.cleanSince ?? t) : null;
     this.usableSince = this.usableSince.map((since, c) =>
       this.usable[c] && this.contact && !this.disturbed ? (since ?? t) : null);
-    events.push(...this.tracker.push(t, y, ok, scale));
+    events.push(...this.tracker.push(t, y, ok, scale, weight));
     if (ok && this.tracker.locked) this.lockSince ??= t;
     else this.lockSince = null;
     // Trazado: la MORFOLOGÍA, no la señal de detección. `abs` viaja en % AC/DC
     // para que los rótulos de pico, valle y escotadura sean fisiológicos y para
     // que la meseta de saturación se vea tal cual, sin suavizarla.
-    const drawn = this.contact && this.usable[this.sel] && !this.disturbed && t >= this.artifactUntil;
+    const drawn = this.contact && this.usable[this.sel] && !gross && t >= this.artifactUntil;
     const mScale = this.morphScale[this.sel];
     const mVal = morph[this.sel];
     if (this.store) {
@@ -283,9 +309,28 @@ export class PPGPipeline {
   }
 
   _analyzeChannels(t) {
-    this.evidence = CH.map((_, c) => assessChannel(
-      this.bufX[c].tail(FS * 8), this.hist[c].tail(FS * 8), this.targetScale[c], FS, this.usable[c], this.evidence[c],
-    ));
+    this.evidence = CH.map((_, c) => {
+      const bn = bandNoise({
+        filtered: this.hist[c].tail(FS * 8),
+        tremorScale: this.tremorScale[c],
+        lagSamples: 0,
+        signalScale: this.targetScale[c],
+        fs: FS,
+      });
+      // lagSamples: usar el hz medido del canal anterior si existe
+      const prevHz = this.evidence[c]?.hz || 0;
+      const lag = prevHz > 0 ? FS / prevHz : 0;
+      const bn2 = lag > 0 ? bandNoise({
+        filtered: this.hist[c].tail(FS * 8),
+        tremorScale: this.tremorScale[c],
+        lagSamples: lag,
+        signalScale: this.targetScale[c],
+        fs: FS,
+      }) : bn;
+      return assessChannel(
+        this.bufX[c].tail(FS * 8), this.hist[c].tail(FS * 8), this.targetScale[c], FS, this.usable[c], this.evidence[c], bn2,
+      );
+    });
     let best = this.sel;
     for (let c = 0; c < 3; c++) {
       if (this.evidence[c].score > this.evidence[best].score) best = c;
@@ -300,8 +345,9 @@ export class PPGPipeline {
     if (challenging && this.challengeCount >= (current.viable ? 3 : 2)) {
       this.sel = best;
       this.selSince = t;
-      // Different channel = different phase and morphology. Never join their RR.
-      this.tracker.dropAcquisition();
+      // Cambio de canal: markBoundary + resetTemplate (no dropAcquisition).
+      this.tracker.markBoundary(t);
+      this.tracker.resetTemplate();
       this.rhythm.reset();
       this.lockSince = null;
       this.artifactUntil = Math.max(this.artifactUntil, t + 0.6);
@@ -311,6 +357,7 @@ export class PPGPipeline {
     this.periodicity = chosen.strength;
     this.tracker.hintHz = chosen.viable ? chosen.hz : 0;
     this.tracker.hintLobed = chosen.viable && chosen.lobed === true;
+    this.tracker.hintStrength = chosen.viable ? chosen.strength : 0;
   }
 
   /**
@@ -361,7 +408,7 @@ export class PPGPipeline {
     const t = this.lastT;
     const s = this.tracker.snapshot(t);
     const evidence = this.evidence[this.sel];
-    const gate = this.finger && this.contact && this.usable[this.sel] && this.sigOk
+    const gate = this.finger && this.contact && this.usable[this.sel] && this.sigOk && this.qualityOk
       && !this.disturbed && t >= this.artifactUntil && !s.stale;
     const intervalHR = s.hr ?? s.hrPreview;
     const agrees = evidence?.hz > 0 && intervalHR > 0
@@ -404,6 +451,7 @@ export class PPGPipeline {
       hrHeld: holding,
       heldAge: holding ? display.age : null,
       cleanSeconds: gate && this.cleanSince !== null ? Math.max(0, t - this.cleanSince) : 0,
+      stableSeconds: this.cleanSince !== null ? Math.max(0, t - this.cleanSince) : 0,
       hr: state === 'locked' ? shownHR : null,
       hrIrregular: irregular,
       hrInst: gate ? s.hrInst : null,
@@ -424,6 +472,7 @@ export class PPGPipeline {
       lastBeat: gate ? s.lastBeat : null,
       pi: gate ? Math.round(2.83 * this.scale[this.sel] * 1000) / 10 : null,
       periodicity: this.finger ? this.periodicity : 0,
+      tremor: this.finger ? Math.max(0, Math.min(1, this.evidence[this.sel]?.tremorRatio ?? 0)) : 0,
       channel: this.channel,
       finger: this.finger,
       tacho: gate ? this.tracker.tacho(32) : [],

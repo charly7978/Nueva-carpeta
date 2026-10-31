@@ -9,7 +9,7 @@
     "lint": "eslint . --quiet",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc -p ./jsconfig.json",
-    "test": "node --import ./scripts/register-alias.mjs --test src/lib/ppg/measurement.test.js src/lib/ppg/continuity.test.js src/lib/ppg/morphology.test.js",
+    "test": "node --import ./scripts/register-alias.mjs --test src/lib/ppg/measurement.test.js src/lib/ppg/continuity.test.js src/lib/ppg/morphology.test.js src/lib/ppg/tremor.test.js",
     "preview": "vite preview"
   },
   "dependencies": {
