@@ -60,6 +60,7 @@ export class PPGPipeline {
     this.interruptedAt = null;
     this.interruptionReset = false;
     this.opticalIssue = null;
+    this.notOkSince = null;
     this.rateDisplay.reset();
     this.artifacts.reset();
     this.tracker.reset();
@@ -69,6 +70,7 @@ export class PPGPipeline {
   /** One reset path: keep the session count, discard ALL current evidence. */
   _dropSignal(t, keepTrace = false) {
     this.cleanSince = null;
+    this.notOkSince = null;
     this.usableSince = [null, null, null];
     this.tracker.dropAcquisition();
     this.rhythm.reset();
@@ -171,11 +173,12 @@ export class PPGPipeline {
     const cur = [r, g, b];
     const level = this.artifacts.update(t, cur, this.usable, optical.spatial, this.contact, this.sel);
     const disturbed = t < this.artifacts.until;
-    // Brief disturbances invalidate intervals, not all acquisition history.
-    // A sustained disruption resets ONCE, never again on quarantine exit.
+    // Las perturbaciones marcan frontera en el tracker sin destruir filtros ni buffers.
+    // Un reseteo destructivo total sólo ocurre ante pérdida prolongada de contacto (> 1.2 s).
     if (this.artifacts.bad) {
       this.interruptedAt ??= t;
-      if (!this.interruptionReset && t - this.interruptedAt >= 0.65) {
+      this.tracker.markBoundary(t);
+      if (!this.contact && t - this.interruptedAt >= 1.2 && !this.interruptionReset) {
         this._dropSignal(t, true);
         this.interruptionReset = true;
       }
@@ -280,12 +283,28 @@ export class PPGPipeline {
     // weight de confianza por calidad (temblor, SNR en banda)
     const tremorRatio = this.evidence[this.sel]?.tremorRatio ?? 0;
     const weight = this.qualityOk ? Math.max(0.25, Math.min(1, 1 - 0.6 * tremorRatio)) : 0.3;
-    this.cleanSince = ok ? (this.cleanSince ?? t) : null;
+    if (!this.contact || !this.usable[this.sel] || gross) {
+      this.cleanSince = null;
+      this.lockSince = null;
+      this.notOkSince = null;
+    } else if (ok) {
+      if (this.notOkSince !== null) {
+        if (this.cleanSince !== null) this.cleanSince += (t - this.notOkSince);
+        this.notOkSince = null;
+      }
+      this.cleanSince ??= t;
+    } else {
+      this.notOkSince ??= t;
+      if (t - this.notOkSince > 0.5) {
+        this.cleanSince = null;
+        this.lockSince = null;
+      }
+    }
     this.usableSince = this.usableSince.map((since, c) =>
       this.usable[c] && this.contact && !this.disturbed ? (since ?? t) : null);
     events.push(...this.tracker.push(t, y, ok, scale, weight));
     if (ok && this.tracker.locked) this.lockSince ??= t;
-    else this.lockSince = null;
+    else if (!ok && this.notOkSince !== null && t - this.notOkSince > 0.5) this.lockSince = null;
     // Trazado: la MORFOLOGÍA, no la señal de detección. `abs` viaja en % AC/DC
     // para que los rótulos de pico, valle y escotadura sean fisiológicos y para
     // que la meseta de saturación se vea tal cual, sin suavizarla.
@@ -421,12 +440,15 @@ export class PPGPipeline {
     const display = this.rateDisplay.update(targetHR, t);
     const shownHR = display.value;
     const holding = display.held && this.finger;
+    const gross = this.artifacts.level === 2;
     let state;
     if (!this.finger) state = 'nofinger';
-    else if (!this.contact || !this.usable[this.sel] || this.commonMode || this.disturbed || t < this.artifactUntil) state = 'artifact';
+    else if (!this.contact || !this.usable[this.sel] || this.commonMode) state = 'artifact';
+    else if (gross && !holding) state = 'artifact';
     else if (!this.ready || !this.sigOk) state = 'searching';
     else if (confirmed || irregular) state = 'locked';
     else if (holding) state = 'recovering';
+    else if (gross || this.disturbed || t < this.artifactUntil) state = 'artifact';
     else if (s.stale && s.everLocked) state = 'lost';
     else state = 'acquiring';
     const quality = !gate ? 0 : irregular

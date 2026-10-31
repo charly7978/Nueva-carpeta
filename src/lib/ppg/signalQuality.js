@@ -17,8 +17,8 @@ export function robustScale(samples) {
  * Raw curvature and measured-cycle residuals estimate noise without treating
  * fast pulse harmonics as sensor noise. Filtering alone is never evidence.
  */
-export const MIN_TREMOR_RATIO = 1.2;
-export const MAX_TREMOR_CONFIDENCE_PENALTY = 1.5;
+export const MIN_TREMOR_RATIO = 3.5;
+export const MAX_TREMOR_CONFIDENCE_PENALTY = 1.2;
 
 export function assessChannel(rawSamples, filteredSamples, scale, fs, usable, previous = null, noise = null) {
   const empty = { score: 0, strength: 0, hz: 0, snr: 0, snrBroad: 0, concentration: 0, viable: false, ambiguous: false, tremorRatio: 0, noiseInBand: 0, noiseOutBand: 0 };
@@ -65,11 +65,11 @@ export function assessChannel(rawSamples, filteredSamples, scale, fs, usable, pr
   const strEnter = tremorActive ? 0.2 : (holding ? 0.2 : 0.3);
   const strHold = tremorActive ? 0.15 : (holding ? 0.2 : 0.2);
   const viable = holding
-    ? snr >= snrHold && tremorRatio <= 1.6 && concentration >= concHold && ac.strength >= strHold
+    ? snr >= snrHold && tremorRatio <= 6.0 && concentration >= concHold && ac.strength >= strHold
     : snr >= snrEnter && tremorRatio <= MIN_TREMOR_RATIO && concentration >= concEnter && ac.strength >= strEnter;
   const value = ac.strength * concentration * Math.min(1, snr / 6);
   const accepted = viable && !ambiguous;
-  const penalty = 1 / (1 + 1.5 * tremorRatio);
+  const penalty = 1 / (1 + MAX_TREMOR_CONFIDENCE_PENALTY * tremorRatio);
   const valuePenalized = value * penalty;
   const score = accepted ? (previous?.viable ? 0.65 * previous.score + 0.35 * valuePenalized : valuePenalized) : 0;
   return {

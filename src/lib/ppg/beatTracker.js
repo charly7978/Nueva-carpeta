@@ -146,9 +146,7 @@ export class BeatTracker {
 
     const events = [];
     if (!ok) {
-      this.invalidAt = t;
-      this.locked = false;
-      // Un !ok aislado ya no vacía pending/outliers (sólo prevRawIbi = 0).
+      // Un !ok aislado no destruye el bloqueo ni fija frontera destructiva.
       this.prevRawIbi = 0;
     }
     if (ok && this.n >= 6) this._checkPeak(this.n - 3);
@@ -260,12 +258,11 @@ export class BeatTracker {
     // Rounded sample windows plus parabolic peak timing can extend the bound
     // by one sample. Without this tolerance, clean single-lobed pulses vanish.
     if (tp - vt < 0.065 || tp - vt > Math.min(1.1, 0.7 * period) + 1 / this.fs) return;
-    for (let k = tk; k <= p + 2; k++) if (!this.V[k % CAP]) return;
-    // Muestras inválidas entre pie y pico: umbral 20 % (no rechazo total).
+    // Muestras inválidas entre pie y pico: umbral tolerante 25 % (tolera rizado de temblor en el flanco).
     let invalidBetween = 0, totalBetween = 0;
     for (let k = tk; k <= p; k++) { totalBetween++; if (!this.V[k % CAP]) invalidBetween++; }
     const noiseFrac = totalBetween > 0 ? invalidBetween / totalBetween : 0;
-    if (noiseFrac > 0.2) return;
+    if (noiseFrac > 0.25) return;
     // Peso de confianza por muestras de baja calidad (W < 0.5) entre pie y pico.
     let lowWeight = 0;
     for (let k = tk; k <= p; k++) if (this.W[k % CAP] < 0.5) lowWeight++;
@@ -451,7 +448,8 @@ export class BeatTracker {
       + Math.max(this.pending[0].post, this.pending[0].settle || 0) <= this.n - 1) {
       const b = this.pending.shift();
       const vec = this._windowVec(b);
-      if (!vec || b.t <= this.invalidAt) {
+      const corruptedRise = this.invalidAt >= (b.vt ?? (b.t - 0.2)) && this.invalidAt <= b.t;
+      if (!vec || corruptedRise) {
         b.bad = true;
         b.q = 0;
         b.ibiValid = false;
@@ -517,8 +515,9 @@ export class BeatTracker {
     const recentBeats = this.beats.filter(b => b.confirmed && b.t > this.invalidAt).slice(-8);
     const recentValid = recentBeats.filter(b => b.ibiValid && !b.bad && !b.sus).length;
     const recentFrac = recentBeats.length ? recentValid / recentBeats.length : 0;
-    const stale = !this.lastConfirmed || this.lastConfirmed.t <= this.invalidAt
+    const stale = !this.lastConfirmed
       || age > Math.max(3.2, 2.6 * ref)
+      || (this.lastConfirmed.t <= this.invalidAt && age > Math.max(1.8, 1.5 * ref))
       || (recentBeats.length >= 4 && recentFrac < 0.4 && age > 1.5);
     if (stale) { this.locked = false; this.hrSmooth = null; }
 
