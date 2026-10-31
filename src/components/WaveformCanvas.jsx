@@ -45,9 +45,26 @@ export default function WaveformCanvas({ storeRef, rhythmRef, mode = 'live' }) {
       canvas.width = Math.round(W * dpr);
       canvas.height = Math.round(H * dpr);
 
-      // Banda central: la onda ocupa la pantalla con aire arriba y abajo
-      const band = clamp(H * 0.42, 150, 460);
-      const padTop = (H - band) * 0.42;
+      // La banda de la onda respeta el alto que ocupa el HUD. En vertical el
+      // panel de métricas se apila abajo y, sin reserva, la mitad inferior del
+      // trazado —y la regla— quedaba detrás de las tarjetas. En horizontal el
+      // panel va a un lado, así que la banda puede usar casi toda la altura.
+      const portrait = W < 620;
+      let band;
+      let padTop;
+      if (portrait) {
+        const topReserve = Math.min(150, H * 0.22);
+        // El pie del HUD en vertical suma: tarjeta de estado, fila de ritmo y
+        // último latido, rejilla de métricas y barra inferior. Si la banda no
+        // reserva ese alto, su regla y su leyenda caen detrás de esas piezas.
+        const bottomReserve = Math.min(H * 0.45, 340);
+        const usable = Math.max(180, H - topReserve - bottomReserve);
+        band = clamp(usable * 0.92, 150, 460);
+        padTop = topReserve + (usable - band) * 0.5;
+      } else {
+        band = clamp(H * 0.42, 150, 460);
+        padTop = (H - band) * 0.42;
+      }
       s.lay = { padTop, padBot: H - padTop - band, band, zeroY: padTop + band * 0.5 };
       s.layers = {};
       s.grads = {

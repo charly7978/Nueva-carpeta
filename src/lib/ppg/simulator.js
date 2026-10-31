@@ -8,9 +8,25 @@
  * aisladas con pausa compensatoria), 'bigeminy' (un latido prematuro tras cada
  * normal) y 'af' (intervalos aleatorios, irregularmente irregular).
  */
+const G = (p, mu, s) => Math.exp(-((p - mu) * (p - mu)) / (2 * s * s));
+
+/**
+ * Onda de pulso fisiológica completa, para que la señal de verificación muestre
+ * lo mismo que se quiere poder leer en una medición real:
+ *   frente sistólico rápido → PICO SISTÓLICO (P1) → caída con ESCOTADURA
+ *   DICRÓTICA (cierre aórtico) → PICO DIASTÓLICO o de reflexión (P2) → cola
+ *   diastólica hasta el PIE.
+ * La suma de tres gaussianas (la versión anterior) no tiene mínimo entre P1 y
+ * P2, así que no podía mostrar escotadura: era una onda de dos jorobas sin
+ * fisiología. Aquí la escotadura es explícita y su profundidad es finita.
+ * Amplitud 0..1 sobre la fase 0..1 del ciclo.
+ */
 function ppgTemplate(phase) {
-  const g = (mu, s) => Math.exp(-((phase - mu) * (phase - mu)) / (2 * s * s));
-  return 1.0 * g(0.2, 0.052) + 0.44 * g(0.39, 0.072) + 0.2 * g(0.62, 0.11);
+  const p = phase < 0 ? phase + 1 : phase;
+  return 1.0 * G(p, 0.2, 0.055)      // P1 sistólico
+    - 0.05 * G(p, 0.345, 0.028)      // escotadura dicrótica
+    + 0.4 * G(p, 0.43, 0.055)        // P2 diastólico (onda reflejada)
+    + 0.1 * G(p, 0.7, 0.11);         // cola diastólica
 }
 
 function gauss() {
@@ -18,6 +34,8 @@ function gauss() {
 }
 
 const PULSE_S = 0.88;   // duración de un pulso (s) en los ritmos por eventos
+// Media del área del pulso: restarla deja la señal centrada en la línea de base
+const PULSE_MEAN = 0.22;
 
 export class PPGSimulator {
   constructor(rhythm = 'normal') {
@@ -74,7 +92,7 @@ export class PPGSimulator {
     e.active = e.active.filter((b) => t - b.t0 < 1.3 * PULSE_S);
     let s = 0;
     for (const b of e.active) s += b.a * ppgTemplate((t - b.t0) / PULSE_S);
-    return (s - 0.33) * 0.016;
+    return (s - PULSE_MEAN) * 0.016;
   }
 
   /** Devuelve [r, g, b] para el instante t (s) */
@@ -88,7 +106,7 @@ export class PPGSimulator {
       // Frecuencia con arritmia sinusal respiratoria
       this.phase += (this._normalHr() / 60) * dt;
       if (this.phase >= 1) this.phase -= 1;
-      pulse = (ppgTemplate(this.phase) - 0.33) * 0.016;
+      pulse = (ppgTemplate(this.phase) - PULSE_MEAN) * 0.016;
     } else {
       pulse = this._eventPulse(t);
     }

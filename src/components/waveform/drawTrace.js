@@ -15,7 +15,7 @@
  */
 
 /** Tangentes PCHIP para los puntos [i0, i1] (ambos inclusive). */
-function monotoneSlopes(xs, ys, i0, i1) {
+export function monotoneSlopes(xs, ys, i0, i1) {
   const n = i1 - i0 + 1;
   const m = new Float64Array(n);
   if (n < 2) return m;

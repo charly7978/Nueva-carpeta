@@ -1,12 +1,13 @@
 /** Camera frames → uniformly sampled, causal PPG → quality-validated beats.
  * No synthetic beats, fixed colour-amplitude ratios or whole-window refiltering.
  */
-import { RingBuffer, median } from '@/lib/dsp';
+import { RingBuffer, median, mean, populationStd as sd } from '@/lib/dsp';
 import { BiquadCascade, designCardiacFilter, designMorphologyFilter } from '@/lib/ppg/streamFilter';
 import { BeatTracker } from '@/lib/ppg/beatTracker';
 import { RhythmAnalyzer, IRREGULAR_KINDS } from '@/lib/ppg/rhythm';
 import { assessChannel, robustScale, MIN_PULSE_SCALE } from '@/lib/ppg/signalQuality';
 import commonModeArtifact from '@/lib/ppg/colourEvidence';
+import { detectPulseFeatures } from '@/lib/ppg/pulseFeatures';
 import { ArtifactGuard } from '@/lib/ppg/artifactGuard';
 import RateDisplay from '@/lib/ppg/rateDisplay';
 
@@ -34,10 +35,13 @@ export class PPGPipeline {
     this.rhythm = new RhythmAnalyzer();
     this.artifacts = new ArtifactGuard();
     this.rateDisplay = new RateDisplay();
+    // Extremos de la sesión medidos en el canal de morfología (el que se dibuja)
+    this.morphSess = { maxPeak: null, minValley: null, amps: [] };
     this.reset();
   }
 
   reset() {
+    this.morphSess = { maxPeak: null, minValley: null, amps: [] };
     this.prev = null;
     this.nextT = 0;
     this.frameIntervals = [];
@@ -82,6 +86,8 @@ export class PPGPipeline {
 
     this.commonMode = false;
     this.sigOk = false;
+    this._pkFor = null;
+    this._pk = null;
     this.bufX.forEach(b => b.clear());
     this.hist.forEach(b => b.clear());
     this.dxh.forEach(b => b.clear());
@@ -316,6 +322,41 @@ export class PPGPipeline {
     return this.rateDisplay.update(target, t).value;
   }
 
+  /**
+   * Pico, valle y amplitud del ÚLTIMO latido medidos sobre el canal de
+   * morfología, que es exactamente el que se dibuja. Así el número del panel y
+   * la etiqueta sobre la onda no pueden contradecirse.
+   */
+  _morphPeaks(t) {
+    if (!this.store || this.store.n < 8) return null;
+    const beats = this.tracker.beats;
+    for (let i = beats.length - 1; i >= 0; i--) {
+      const b = beats[i];
+      if (!b || !b.confirmed || b.bad) continue;
+      if (this._pkFor !== b.id) {
+        const fx = detectPulseFeatures(this.store, b, beats[i + 1] || null);
+        // El latido más reciente aún no tiene su morfología completa: se usa el
+        // anterior en vez de dejar el panel en blanco medio segundo de cada ciclo.
+        if (!fx) continue;
+        this._pkFor = b.id;
+        const peak = fx.peak.abs;
+        const valley = fx.foot.abs;
+        const amp = Number.isFinite(peak) && Number.isFinite(valley) ? peak - valley : null;
+        this._pk = { peak, valley, amp, t };
+        // Extremos y dispersión de la sesión, en la misma unidad que las etiquetas
+        const sess = this.morphSess;
+        if (Number.isFinite(peak)) sess.maxPeak = sess.maxPeak == null ? peak : Math.max(sess.maxPeak, peak);
+        if (Number.isFinite(valley)) sess.minValley = sess.minValley == null ? valley : Math.min(sess.minValley, valley);
+        if (amp != null) {
+          sess.amps.push(amp);
+          if (sess.amps.length > 12) sess.amps.shift();
+        }
+      }
+      return this._pk;
+    }
+    return null;
+  }
+
   getState() {
     const t = this.lastT;
     const s = this.tracker.snapshot(t);
@@ -350,6 +391,9 @@ export class PPGPipeline {
     else state = 'acquiring';
     const quality = !gate ? 0 : irregular
       ? Math.round(100 * rhythm.shapeQ * rhythm.trustFrac) : s.quality;
+    const amps = this.morphSess.amps;
+    const avgAmp = amps.length ? mean(amps) : null;
+    const ampVar = amps.length >= 3 && avgAmp > 0 ? (sd(amps) / avgAmp) * 100 : null;
     return {
       state,
       pulseAmbiguous: !!evidence?.ambiguous || (!confirmed && harmonicConflict),
@@ -370,7 +414,13 @@ export class PPGPipeline {
       beatCount: s.beatCount,
       quality,
       rhythm,
-      peaks: gate ? this.tracker.peakStats() : {},
+      peaks: gate ? {
+        last: this._morphPeaks(t),
+        maxPeak: this.morphSess.maxPeak,
+        minValley: this.morphSess.minValley,
+        avgAmp,
+        ampVar,
+      } : {},
       lastBeat: gate ? s.lastBeat : null,
       pi: gate ? Math.round(2.83 * this.scale[this.sel] * 1000) / 10 : null,
       periodicity: this.finger ? this.periodicity : 0,

@@ -21,15 +21,23 @@ const MAXPTS = 1400;
 const MONO = '"JetBrains Mono", ui-monospace, monospace';
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
-/** Leyenda de instrumento: qué se está viendo, en una línea discreta */
+/**
+ * Leyenda de instrumento, al pie de la banda: ahí la señal no llega (su
+ * excursión negativa es pequeña), así que nunca tapa el pico ni el valle.
+ * En pantallas estrechas se queda solo la línea de identificación.
+ */
 function drawCaption(ctx, W, lay, fs) {
+  const y0 = lay.padTop + lay.band - (fs + 8) * 2 - 22;
   ctx.font = `600 ${fs}px ${MONO}`;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
-  ctx.fillStyle = 'rgba(170,255,220,0.42)';
-  ctx.fillText('PPG · MORFOLOGÍA 0,1–10 Hz · ESCALA AUTO', 62, lay.padTop + 6);
-  ctx.fillStyle = 'rgba(170,255,220,0.3)';
-  ctx.fillText('P1 PICO SISTÓLICO   ◇ ESCOTADURA   P2 ONDA REFLEJADA   ○ PIE', 62, lay.padTop + 6 + fs + 4);
+  // x = 48: deja libre la columna donde el eje de amplitud escribe sus marcas.
+  ctx.fillStyle = 'rgba(170,255,220,0.4)';
+  ctx.fillText('PPG · MORFOLOGÍA 0,1–10 Hz · ESCALA AUTO', 48, y0);
+  if (W >= 620) {
+    ctx.fillStyle = 'rgba(170,255,220,0.28)';
+    ctx.fillText('P1 PICO SISTÓLICO   ◇ ESCOTADURA   P2 ONDA REFLEJADA   ○ PIE', 48, y0 + fs + 5);
+  }
 }
 
 /**
@@ -56,16 +64,22 @@ export function createFrameRenderer(ctx, canvas, s) {
     if (!s.layers[lk]) s.layers[lk] = buildGridLayer(W, H, dpr, rgb, lay);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.drawImage(s.layers[lk], 0, 0, W, H);
+    // Halo de llegada de la señal: bajo el trazo, nunca encima
+    ctx.fillStyle = s.grads[`pen${lk}`];
+    ctx.fillRect(0, 0, W, H);
 
-    const pps = W < 360 ? W / 3 : clamp(W * 0.45, 150, 480);
-    const penX = W - 14;
+    // En horizontal el panel de métricas ocupa la derecha: el trazado reserva esa
+    // columna, así el lápiz y el último latido nunca quedan bajo una tarjeta.
+    const plotW = W >= 900 ? W * 0.64 : W;
+    const pps = plotW < 360 ? plotW / 3 : clamp(plotW * 0.45, 150, 480);
+    const penX = plotW - 14;
     const nowSec = performance.now() / 1000;
 
     if (!live || !store || store.n < 5) {
       ctx.fillStyle = s.grads[`pen${lk}`];
       ctx.fillRect(0, 0, W, H);
       drawStandby(ctx, W, H, s, rgb);
-      drawAxes(ctx, { W, H, lay, rgb, pps, penT: 0, rangeT: -(W - penX) / pps, pctPerPx: 0, fs });
+      drawAxes(ctx, { W, H, lay, rgb, pps, penT: 0, rangeT: -penX / pps, pctPerPx: 0, fs, penX });
       return;
     }
 
@@ -76,7 +90,7 @@ export function createFrameRenderer(ctx, canvas, s) {
     const m = collectWindow(store, t0, pen, pt, rv, MAXPTS);
     if (m < 3) {
       drawStandby(ctx, W, H, s, rgb);
-      drawAxes(ctx, { W, H, lay, rgb, pps, penT: 0, rangeT: -(W - penX) / pps, pctPerPx: 0, fs });
+      drawAxes(ctx, { W, H, lay, rgb, pps, penT: 0, rangeT: -penX / pps, pctPerPx: 0, fs, penX });
       return;
     }
 
@@ -123,15 +137,15 @@ export function createFrameRenderer(ctx, canvas, s) {
       const g = store.g[(store.n - 1) % store.cap];
       if (Number.isFinite(g) && g > 0) mScale = g;
     }
+    // La leyenda se pinta ANTES que la regla: si coinciden, manda el eje. Y se
+    // sube lo justo para no rozar las marcas de tiempo.
+    drawCaption(ctx, W, lay, fs - 1);
     drawAxes(ctx, {
       W, H, lay, rgb, pps, penT: pen, rangeT: t0,
-      pctPerPx: mScale > 0 ? (mScale * 100) / scalePx : 0, fs,
+      pctPerPx: mScale > 0 ? (mScale * 100) / scalePx : 0, fs, penX,
     });
-    drawCaption(ctx, W, lay, fs - 1);
 
     // Lápiz: columna de barrido y brillo en la punta, que late con cada pulso
-    ctx.fillStyle = s.grads[`pen${lk}`];
-    ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = `rgba(${rgb},${0.3 + pulse * 0.45})`;
     ctx.fillRect(penX - 0.75, lay.padTop - 6, 1.5, lay.band + 12);
     if (Number.isFinite(py[m - 1])) {

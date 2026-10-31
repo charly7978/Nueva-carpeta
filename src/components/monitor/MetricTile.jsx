@@ -5,12 +5,14 @@ export default function MetricTile({ label, value, unit, color, className = '' }
   const has = value != null;
   return (
     <div
-      className={`relative flex min-h-0 min-w-0 flex-col justify-between overflow-hidden rounded-xl border px-2.5 py-1.5 ${className}`}
+      className={`relative flex min-h-0 min-w-0 flex-col justify-between overflow-hidden rounded-xl border px-2.5 py-1.5 backdrop-blur-sm ${className}`}
       style={{
-        borderColor: has ? `${color}33` : 'rgba(255,255,255,0.07)',
+        borderColor: has ? `${color}3d` : 'rgba(255,255,255,0.08)',
+        // La traza pasa por detrás: el velo tiene que ser suficiente para que la
+        // cifra se lea sin quitar la sensación de instrumento sumergido en la onda.
         background: has
-          ? `linear-gradient(155deg, ${color}24, rgba(4,9,16,0.46))`
-          : 'linear-gradient(155deg, rgba(255,255,255,0.05), rgba(4,9,16,0.4))',
+          ? `linear-gradient(155deg, ${color}22, rgba(3,7,13,0.84))`
+          : 'linear-gradient(155deg, rgba(255,255,255,0.05), rgba(3,7,13,0.78))',
       }}
     >
       <span

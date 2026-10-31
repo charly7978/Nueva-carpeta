@@ -30,7 +30,7 @@ const fmt = (v) => (Math.abs(v) >= 1 ? v.toFixed(1) : v.toFixed(2));
  * @param penT     instante del lápiz
  * @param rangeT   instante del borde izquierdo visible
  */
-export function drawAxes(ctx, { W, H, lay, rgb, pps, penT, rangeT, pctPerPx, fs = 10 }) {
+export function drawAxes(ctx, { W, H, lay, rgb, pps, penT, rangeT, pctPerPx, fs = 10, penX = W - 14 }) {
   const red = rgb !== '0,255,136';
   const ink = red ? 'rgba(255,140,150,0.78)' : 'rgba(150,240,205,0.72)';
   const faint = red ? 'rgba(255,90,105,0.22)' : 'rgba(0,255,136,0.2)';
@@ -67,15 +67,18 @@ export function drawAxes(ctx, { W, H, lay, rgb, pps, penT, rangeT, pctPerPx, fs 
   }
 
   // ── Abscisa: segundos hasta el lápiz ──
+  // Va dentro del borde inferior de la banda: por debajo del trazo (su excursión
+  // negativa es pequeña) y por encima de las tarjetas del HUD, sin taparse con
+  // nada. Fuera de la banda chocaría con el panel inferior.
   if (pps > 0) {
     const secStep = niceStep(W / pps, W < 520 ? 3 : 5);
     const start = Math.ceil(rangeT / secStep) * secStep;
-    const base = lay.padTop + lay.band + 2;
+    const base = lay.padTop + lay.band - 18;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     for (let s = start; s <= penT + 1e-6; s += secStep) {
-      const x = W - 14 + (s - penT) * pps;
-      if (x < 6 || x > W - 30) continue;
+      const x = penX + (s - penT) * pps;
+      if (x < 6 || x > W - 24) continue;
       const rel = s - penT;
       ctx.strokeStyle = faint;
       ctx.beginPath();
@@ -83,7 +86,7 @@ export function drawAxes(ctx, { W, H, lay, rgb, pps, penT, rangeT, pctPerPx, fs 
       ctx.lineTo(Math.round(x) + 0.5, base + 6);
       ctx.stroke();
       ctx.fillStyle = ink;
-      ctx.fillText(rel === 0 ? '0' : `${rel.toFixed(secStep < 1 ? 1 : 0)}s`, x, base + 7);
+      ctx.fillText(rel === 0 ? '0' : `${rel.toFixed(secStep < 1 ? 1 : 0)}s`, x, base + 8);
     }
   }
 }
