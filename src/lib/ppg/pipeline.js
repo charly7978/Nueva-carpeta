@@ -310,25 +310,17 @@ export class PPGPipeline {
 
   _analyzeChannels(t) {
     this.evidence = CH.map((_, c) => {
-      const bn = bandNoise({
-        filtered: this.hist[c].tail(FS * 8),
-        tremorScale: this.tremorScale[c],
-        lagSamples: 0,
-        signalScale: this.targetScale[c],
-        fs: FS,
-      });
-      // lagSamples: usar el hz medido del canal anterior si existe
       const prevHz = this.evidence[c]?.hz || 0;
       const lag = prevHz > 0 ? FS / prevHz : 0;
-      const bn2 = lag > 0 ? bandNoise({
+      const bn = bandNoise({
         filtered: this.hist[c].tail(FS * 8),
         tremorScale: this.tremorScale[c],
         lagSamples: lag,
         signalScale: this.targetScale[c],
         fs: FS,
-      }) : bn;
+      });
       return assessChannel(
-        this.bufX[c].tail(FS * 8), this.hist[c].tail(FS * 8), this.targetScale[c], FS, this.usable[c], this.evidence[c], bn2,
+        this.bufX[c].tail(FS * 8), this.hist[c].tail(FS * 8), this.targetScale[c], FS, this.usable[c], this.evidence[c], bn,
       );
     });
     let best = this.sel;

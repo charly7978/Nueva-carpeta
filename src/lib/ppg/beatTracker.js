@@ -520,7 +520,8 @@ export class BeatTracker {
     const recentBeats = this.beats.filter(b => b.confirmed && b.t > this.invalidAt).slice(-8);
     const recentValid = recentBeats.filter(b => b.ibiValid && !b.bad && !b.sus).length;
     const recentFrac = recentBeats.length ? recentValid / recentBeats.length : 0;
-    const stale = !this.lastConfirmed || age > Math.max(3.2, 2.6 * ref)
+    const stale = !this.lastConfirmed || this.lastConfirmed.t <= this.invalidAt
+      || age > Math.max(3.2, 2.6 * ref)
       || (recentBeats.length >= 4 && recentFrac < 0.4 && age > 1.5);
     if (stale) { this.locked = false; this.hrSmooth = null; }
 

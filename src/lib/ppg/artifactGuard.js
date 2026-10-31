@@ -15,6 +15,7 @@ export class ArtifactGuard {
     this.until = -Infinity;
     this.lastStats = -Infinity;
     this.bad = false;
+    this.level = 0;
   }
 
   update(t, rgb, usable, spatial, contact, selected) {
